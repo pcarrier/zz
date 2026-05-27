@@ -112,6 +112,15 @@ enum BSPNode: Codable, Identifiable, Hashable {
         }
     }
 
+    func ratio(forSplit splitID: UUID) -> Double? {
+        switch self {
+        case .leaf: return nil
+        case .split(let id, _, let r, let a, let b):
+            if id == splitID { return r }
+            return a.ratio(forSplit: splitID) ?? b.ratio(forSplit: splitID)
+        }
+    }
+
     func neighbor(of tabID: UUID, direction: Direction) -> UUID? {
         var path: [(node: BSPNode, fromFirst: Bool)] = []
         guard pathTo(tabID, path: &path) else { return nil }
@@ -422,6 +431,33 @@ final class BrowserStore {
         scheduleSave()
     }
 
+    /// Drag-session state for split handles: capture the ratio once at drag start so
+    /// per-event ratio computations are stable across SwiftUI rebuilds.
+    @ObservationIgnored
+    private var dragInitialRatios: [UUID: Double] = [:]
+
+    func beginRatioDrag(_ splitID: UUID) {
+        // Idempotent: only capture the starting ratio the first time per drag.
+        if dragInitialRatios[splitID] == nil {
+            dragInitialRatios[splitID] = root.ratio(forSplit: splitID)
+        }
+    }
+
+    /// Apply a ratio update during an in-progress drag. Computes the new ratio
+    /// from the drag-start size plus the gesture's cumulative translation,
+    /// without rescheduling persistence on every frame.
+    func updateRatioDrag(_ splitID: UUID, usable: CGFloat, translation: CGFloat) {
+        guard let initial = dragInitialRatios[splitID], usable > 0 else { return }
+        let newSize = usable * initial + translation
+        let newRatio = (newSize / usable).clamped(to: 0.05...0.95)
+        root = root.settingRatio(newRatio, for: splitID)
+    }
+
+    func endRatioDrag(_ splitID: UUID) {
+        dragInitialRatios[splitID] = nil
+        scheduleSave()
+    }
+
     func moveFocus(_ direction: Direction) {
         guard let current = focusedTabID,
               let next = root.neighbor(of: current, direction: direction) else { return }
@@ -431,6 +467,28 @@ final class BrowserStore {
 
     func setSidebarWidth(_ width: Double) {
         sidebarWidth = width.clamped(to: 0...520)
+        scheduleSave()
+    }
+
+    @ObservationIgnored
+    private var dragInitialSidebarWidth: Double?
+
+    func beginSidebarDrag() {
+        if dragInitialSidebarWidth == nil {
+            dragInitialSidebarWidth = sidebarWidth
+        }
+    }
+
+    /// Update sidebar width from a cumulative drag translation. Positive
+    /// translation means dragging right; since the sidebar is on the right
+    /// edge, dragging right shrinks it.
+    func updateSidebarDrag(translation: CGFloat) {
+        guard let initial = dragInitialSidebarWidth else { return }
+        sidebarWidth = (initial - Double(translation)).clamped(to: 0...520)
+    }
+
+    func endSidebarDrag() {
+        dragInitialSidebarWidth = nil
         scheduleSave()
     }
 

@@ -112,9 +112,12 @@ private struct BrowserScene: View {
             BSPView(node: store.root)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             if !store.parked.isEmpty {
-                SplitHandle(axis: .vertical) { delta in
-                    store.setSidebarWidth(store.sidebarWidth - delta)
-                }
+                SplitHandle(
+                    axis: .vertical,
+                    onBegin:     { store.beginSidebarDrag() },
+                    onTranslate: { t in store.updateSidebarDrag(translation: t) },
+                    onEnd:       { store.endSidebarDrag() }
+                )
                 .transition(.opacity)
                 SidebarView()
                     .frame(width: store.sidebarWidth)

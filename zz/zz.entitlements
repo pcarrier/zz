@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Sandbox / Network -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.files.user-selected.read-only</key>
+	<true/>
+
+	<!--
+	  Passkey support in WKWebView.
+
+	  Both of these entitlements are *restricted* by Apple. To use them in a
+	  signed build (including TestFlight / App Store), you must request access:
+	    https://developer.apple.com/contact/request/web-browser-entitlement
+	  After approval, the entitlements get added to your provisioning profile
+	  and WKWebView will surface passkey prompts for arbitrary third-party
+	  sites that use the WebAuthn API.
+	-->
+	<key>com.apple.developer.web-browser</key>
+	<true/>
+	<key>com.apple.developer.web-browser.public-key-credential</key>
+	<true/>
+</dict>
+</plist>

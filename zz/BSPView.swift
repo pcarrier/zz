@@ -23,19 +23,29 @@ struct BSPView: View {
                     if axis == .horizontal {
                         VStack(spacing: 0) {
                             BSPView(node: first).frame(height: firstSize)
-                            SplitHandle(axis: axis, thickness: dividerThickness) { delta in
-                                let newRatio = (firstSize + delta) / max(usable, 1)
-                                store.setRatio(newRatio, for: id)
-                            }
+                            SplitHandle(
+                                axis: axis,
+                                thickness: dividerThickness,
+                                onBegin:     { store.beginRatioDrag(id) },
+                                onTranslate: { t in
+                                    store.updateRatioDrag(id, usable: usable, translation: t)
+                                },
+                                onEnd:       { store.endRatioDrag(id) }
+                            )
                             BSPView(node: second).frame(height: secondSize)
                         }
                     } else {
                         HStack(spacing: 0) {
                             BSPView(node: first).frame(width: firstSize)
-                            SplitHandle(axis: axis, thickness: dividerThickness) { delta in
-                                let newRatio = (firstSize + delta) / max(usable, 1)
-                                store.setRatio(newRatio, for: id)
-                            }
+                            SplitHandle(
+                                axis: axis,
+                                thickness: dividerThickness,
+                                onBegin:     { store.beginRatioDrag(id) },
+                                onTranslate: { t in
+                                    store.updateRatioDrag(id, usable: usable, translation: t)
+                                },
+                                onEnd:       { store.endRatioDrag(id) }
+                            )
                             BSPView(node: second).frame(width: secondSize)
                         }
                     }
@@ -48,18 +58,28 @@ struct BSPView: View {
 
 /// Draggable divider used by the BSP renderer and the sidebar splitter.
 /// Hit area equals `thickness`; the visible line is always a 1pt hairline.
+///
+/// Callers receive `cumulative` translation from the gesture's start (not deltas)
+/// so they can compute the new size from a stable starting reference, which
+/// avoids jumps if SwiftUI rebuilds the handle mid-drag (any internal
+/// `@State` "lastTranslation" can be lost across tree rebuilds).
 struct SplitHandle: View {
     let axis: BSPNode.Axis
     var thickness: CGFloat = 12
-    let onDelta: (CGFloat) -> Void
+    var onBegin: () -> Void = {}
+    let onTranslate: (CGFloat) -> Void
+    var onEnd: () -> Void = {}
 
-    @State private var lastTranslation: CGFloat = 0
-
-    init(axis: BSPNode.Axis, thickness: CGFloat = 12,
-         onDelta: @escaping (CGFloat) -> Void) {
+    init(axis: BSPNode.Axis,
+         thickness: CGFloat = 12,
+         onBegin: @escaping () -> Void = {},
+         onTranslate: @escaping (CGFloat) -> Void,
+         onEnd: @escaping () -> Void = {}) {
         self.axis = axis
         self.thickness = thickness
-        self.onDelta = onDelta
+        self.onBegin = onBegin
+        self.onTranslate = onTranslate
+        self.onEnd = onEnd
     }
 
     var body: some View {
@@ -76,14 +96,16 @@ struct SplitHandle: View {
             .gesture(
                 DragGesture(minimumDistance: 2)
                     .onChanged { value in
-                        let current = axis == .horizontal
+                        // `onBegin` is idempotent on the receiving side, so
+                        // calling it on every event is safe and removes the
+                        // need for fragile per-handle `@State`.
+                        onBegin()
+                        let cumulative = axis == .horizontal
                             ? value.translation.height
                             : value.translation.width
-                        let delta = current - lastTranslation
-                        lastTranslation = current
-                        onDelta(delta)
+                        onTranslate(cumulative)
                     }
-                    .onEnded { _ in lastTranslation = 0 }
+                    .onEnded { _ in onEnd() }
             )
             #if os(macOS)
             .onHover { hovering in
