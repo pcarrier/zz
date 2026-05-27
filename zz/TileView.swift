@@ -1,0 +1,357 @@
+import Foundation
+import SwiftUI
+import UniformTypeIdentifiers
+import Observation
+
+struct TileView: View {
+    let tabID: UUID
+
+    @Environment(BrowserStore.self) private var store
+
+    @State private var dropState = TileDropState()
+
+    var body: some View {
+        Group {
+            if let tab = store.tab(tabID) {
+                tile(for: tab)
+            } else {
+                Color.canvas
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func tile(for tab: Tab) -> some View {
+        let active = store.focusedTabID == tabID
+        Group {
+            if tab.isBlank {
+                EmptyTileState { store.focus(tabID); store.focusURLBar() }
+            } else {
+                HostedWebView(webView: tab.webView,
+                              onInteraction: { store.focus(tabID) },
+                              dropHandler: PaneDropHandler(
+                                update: { location, size in
+                                  dropState.update(location: location, size: size)
+                                },
+                                perform: { payload, location, size in
+                                  dropState.size = size
+                                  let zone = dropZone(at: location, in: size)
+                                  performPaneDrop(payload, zone: zone)
+                                  dropState.clear()
+                                },
+                                end: {
+                                  dropState.clear()
+                                }
+                              ),
+                              shouldHost: { store.isMainPaneHost(tabID) },
+                              layoutRevision: store.paneLayoutRevision(for: tabID))
+            }
+        }
+        .background(Color.canvas)
+        .overlay(alignment: .top) {
+            if tab.isLoading,
+               tab.estimatedProgress > 0, tab.estimatedProgress < 1 {
+                GeometryReader { proxy in
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: proxy.size.width * tab.estimatedProgress, height: 2)
+                        .animation(.easeOut(duration: 0.25), value: tab.estimatedProgress)
+                }
+                .frame(height: 2)
+                .allowsHitTesting(false)
+            }
+        }
+        .overlay {
+            if let zone = dropState.zone {
+                DropZoneIndicator(zone: zone)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .overlay(
+            Rectangle()
+                .strokeBorder(active ? Color.accentColor : Color.clear, lineWidth: 1.5)
+        )
+        .clipShape(.rect)
+        .contentShape(.rect)
+        .onTapGesture { store.focus(tabID) }
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { dropState.size = proxy.size }
+                    .onChange(of: proxy.size) { _, new in dropState.size = new }
+            }
+        )
+        .onDrop(of: TileDropDelegate.acceptedContentTypes, delegate: TileDropDelegate(
+            store: store, tabID: tabID, state: dropState
+        ))
+        .onDisappear { dropState.clear() }
+        .animation(.easeOut(duration: 0.08), value: dropState.zone)
+    }
+
+    @MainActor
+    private func performPaneDrop(_ payload: PaneDropPayload, zone: DropZone) {
+        switch payload {
+        case .url(let urlString):
+            store.dropURL(urlString, on: tabID, zone: zone)
+        case .parkedTab(let parkedTabID):
+            store.dropParked(parkedTabID, on: tabID, zone: zone)
+        }
+    }
+}
+
+// MARK: - Empty state
+
+private struct EmptyTileState: View {
+    var onTap: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "safari")
+                .font(.system(size: 44))
+                .foregroundStyle(.tertiary)
+            Text("New Tile")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text("Type a URL or press ⌘L")
+                .font(.callout)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.secondary.opacity(0.05))
+        .contentShape(.rect)
+        .onTapGesture(perform: onTap)
+    }
+}
+
+// MARK: - Drop state (class-based so the delegate sees fresh values across renders)
+
+enum DropZone: Equatable { case top, bottom, left, right, center }
+
+@MainActor
+@Observable
+final class TileDropState {
+    var zone: DropZone?
+    var size: CGSize = .zero
+
+    @ObservationIgnored
+    private var clearTask: Task<Void, Never>?
+
+    func update(location: CGPoint, size: CGSize) {
+        self.size = size
+        zone = dropZone(at: location, in: size)
+        scheduleClear()
+    }
+
+    func update(location: CGPoint) {
+        zone = dropZone(at: location, in: size)
+        scheduleClear()
+    }
+
+    func clear() {
+        clearTask?.cancel()
+        clearTask = nil
+        zone = nil
+    }
+
+    private func scheduleClear() {
+        clearTask?.cancel()
+        clearTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled else { return }
+            zone = nil
+            clearTask = nil
+        }
+    }
+}
+
+/// Outer 15% of each dimension classifies as an edge zone; the inner 70% is center.
+private func dropZone(at location: CGPoint, in size: CGSize) -> DropZone {
+    guard size.width > 0, size.height > 0 else { return .center }
+    let xFrac = location.x / size.width
+    let yFrac = location.y / size.height
+
+    let dLeft = xFrac
+    let dRight = 1 - xFrac
+    let dTop = yFrac
+    let dBottom = 1 - yFrac
+    let minDist = min(dLeft, dRight, dTop, dBottom)
+
+    if minDist > 0.15 { return .center }
+    if minDist == dTop { return .top }
+    if minDist == dBottom { return .bottom }
+    if minDist == dLeft { return .left }
+    return .right
+}
+
+private struct TileDropDelegate: DropDelegate {
+    let store: BrowserStore
+    let tabID: UUID
+    let state: TileDropState
+
+    static let acceptedContentTypes: [UTType] = [
+        .url,
+        .plainText,
+        .utf8PlainText,
+        .text,
+        .json,
+    ]
+
+    private static let acceptedTypeIdentifiers = acceptedContentTypes.map(\.identifier)
+
+    private static let urlTypes: [String] = [
+        UTType.url.identifier,
+        UTType.plainText.identifier,
+        UTType.utf8PlainText.identifier,
+        UTType.text.identifier,
+    ]
+
+    private static let tabTypes: [String] = [
+        UTType.json.identifier,
+    ]
+
+    func validateDrop(info: DropInfo) -> Bool {
+        store.isMainPaneHost(tabID) &&
+            info.hasItemsConforming(to: Self.acceptedTypeIdentifiers)
+    }
+
+    func dropEntered(info: DropInfo) {
+        state.update(location: info.location)
+    }
+
+    func dropExited(info: DropInfo) {
+        state.clear()
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        state.update(location: info.location)
+        return DropProposal(operation: info.hasItemsConforming(to: Self.tabTypes) ? .move : .copy)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let target = zone(at: info.location)
+        state.clear()
+        guard store.isMainPaneHost(tabID) else { return false }
+
+        if info.hasItemsConforming(to: Self.tabTypes),
+           loadParkedTab(from: info, zone: target) {
+            return true
+        }
+        if loadURL(from: info, zone: target) { return true }
+        return false
+    }
+
+    private func zone(at location: CGPoint) -> DropZone {
+        dropZone(at: location, in: state.size)
+    }
+
+    private func loadURL(from info: DropInfo, zone: DropZone) -> Bool {
+        if let provider = info.itemProviders(for: [UTType.url.identifier]).first {
+            if provider.canLoadObject(ofClass: URL.self) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    apply(.url(url.absoluteString), zone: zone)
+                }
+                return true
+            }
+            return loadText(from: provider, typeIdentifier: UTType.url.identifier, zone: zone)
+        }
+
+        for type in Self.urlTypes where type != UTType.url.identifier {
+            if let provider = info.itemProviders(for: [type]).first {
+                return loadText(from: provider, typeIdentifier: type, zone: zone)
+            }
+        }
+
+        return false
+    }
+
+    private func loadParkedTab(from info: DropInfo, zone: DropZone) -> Bool {
+        guard let provider = info.itemProviders(for: Self.tabTypes).first else { return false }
+        provider.loadDataRepresentation(forTypeIdentifier: UTType.json.identifier) { data, _ in
+            guard let data else { return }
+            if let ref = try? JSONDecoder().decode(TabRef.self, from: data) {
+                apply(.parkedTab(ref.id), zone: zone)
+                return
+            }
+            if let string = String(data: data, encoding: .utf8),
+               let id = UUID(uuidString: string.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                apply(.parkedTab(id), zone: zone)
+            }
+        }
+        return true
+    }
+
+    private func loadText(from provider: NSItemProvider,
+                          typeIdentifier: String,
+                          zone: DropZone) -> Bool {
+        provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
+            guard let text = text(from: item) else { return }
+            apply(.url(text), zone: zone)
+        }
+        return true
+    }
+
+    private func text(from item: NSSecureCoding?) -> String? {
+        switch item {
+        case let url as URL:
+            return url.absoluteString
+        case let data as Data:
+            return String(data: data, encoding: .utf8)
+        case let string as String:
+            return string
+        case let string as NSString:
+            return string as String
+        default:
+            return nil
+        }
+    }
+
+    private func apply(_ payload: PaneDropPayload, zone: DropZone) {
+        let store = self.store
+        let tabID = self.tabID
+        Task { @MainActor in
+            switch payload {
+            case .url(let urlString):
+                store.dropURL(urlString, on: tabID, zone: zone)
+            case .parkedTab(let parkedTabID):
+                store.dropParked(parkedTabID, on: tabID, zone: zone)
+            }
+        }
+    }
+}
+
+private struct DropZoneIndicator: View {
+    let zone: DropZone
+
+    var body: some View {
+        GeometryReader { proxy in
+            let w = proxy.size.width
+            let h = proxy.size.height
+            let frame = targetFrame(width: w, height: h)
+            Rectangle()
+                .fill(Color.accentColor.opacity(0.18))
+                .overlay(Rectangle().strokeBorder(Color.accentColor, lineWidth: 2))
+                .frame(width: frame.width, height: frame.height)
+                .position(x: frame.midX, y: frame.midY)
+        }
+    }
+
+    private func targetFrame(width w: CGFloat, height h: CGFloat) -> CGRect {
+        switch zone {
+        case .center:
+            let inset: CGFloat = 0.18
+            return CGRect(x: w * inset, y: h * inset,
+                          width: w * (1 - 2 * inset),
+                          height: h * (1 - 2 * inset))
+        case .top:
+            return CGRect(x: 0, y: 0, width: w, height: h * 0.5)
+        case .bottom:
+            return CGRect(x: 0, y: h * 0.5, width: w, height: h * 0.5)
+        case .left:
+            return CGRect(x: 0, y: 0, width: w * 0.5, height: h)
+        case .right:
+            return CGRect(x: w * 0.5, y: 0, width: w * 0.5, height: h)
+        }
+    }
+}

@@ -1,18 +1,24 @@
-//
-//  zzTests.swift
-//  zzTests
-//
-//  Created by Pierre Carrier on 26.05.2026.
-//
-
+import Foundation
 import Testing
+@testable import zz
 
-struct zzTests {
+@MainActor
+struct BrowserUtilityTests {
 
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
-        // Swift Testing Documentation
-        // https://developer.apple.com/documentation/testing
+    @Test func bareHostGetsHTTPS() {
+        #expect(URLNormalizer.resolve("example.com")?.absoluteString == "https://example.com")
     }
 
+    @Test func searchTermsUseDuckDuckGo() {
+        #expect(URLNormalizer.resolve("open ai")?.absoluteString == "https://duckduckgo.com/?q=open%20ai")
+    }
+
+    @Test func droppedTextExtractsFirstLink() {
+        #expect(DroppedURL.string(fromText: "Read https://example.com/path now") == "https://example.com/path")
+    }
+
+    @Test func fuzzyMatchRejectsMissingCharacters() {
+        #expect(FuzzyMatch.score(needle: "zz", in: "browser") == nil)
+        #expect(FuzzyMatch.score(needle: "zz", in: "Zebra Zone") != nil)
+    }
 }

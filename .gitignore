@@ -1,0 +1,17 @@
+.DS_Store
+
+# Xcode user and build products
+DerivedData/
+build/
+*.xcresult
+*.dSYM
+*.dSYM.zip
+*.ipa
+*.app
+*.appex
+*.xcarchive
+*.xcuserstate
+xcuserdata/
+
+# Swift Package Manager build products, if the project gains packages later
+.build/
