@@ -55,7 +55,6 @@ struct TileView: View {
                     Rectangle()
                         .fill(Color.accentColor)
                         .frame(width: proxy.size.width * tab.estimatedProgress, height: 2)
-                        .animation(.easeOut(duration: 0.25), value: tab.estimatedProgress)
                 }
                 .frame(height: 2)
                 .allowsHitTesting(false)
@@ -65,7 +64,6 @@ struct TileView: View {
             if let zone = dropState.zone {
                 DropZoneIndicator(zone: zone)
                     .allowsHitTesting(false)
-                    .transition(.opacity)
             }
         }
         .overlay(
@@ -86,7 +84,6 @@ struct TileView: View {
             store: store, tabID: tabID, state: dropState
         ))
         .onDisappear { dropState.clear() }
-        .animation(.easeOut(duration: 0.08), value: dropState.zone)
     }
 
     @MainActor

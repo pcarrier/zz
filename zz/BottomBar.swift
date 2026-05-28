@@ -80,6 +80,14 @@ struct BottomBar: View {
     @ViewBuilder
     private func actionButtons(tab: Tab?) -> some View {
         HStack(spacing: 2) {
+            BarIconButton(name: store.zoomedTabID == nil
+                            ? "arrow.up.left.and.arrow.down.right"
+                            : "arrow.down.right.and.arrow.up.left",
+                          enabled: tab != nil,
+                          action: { store.toggleZoom() },
+                          help: store.zoomedTabID == nil
+                            ? "Zoom focused tile (⌃⌘F)"
+                            : "Restore layout (⌃⌘F)")
             BarIconButton(name: "tray.and.arrow.down",
                           enabled: !(tab?.isBlank ?? true),
                           action: { if let id = store.focusedTabID { store.park(id) } },

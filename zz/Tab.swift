@@ -85,14 +85,6 @@ final class Tab {
         // `overflow: hidden` or content shorter than the viewport.
         self.webView.scrollView.alwaysBounceVertical = false
         self.webView.scrollView.alwaysBounceHorizontal = false
-        // Hide WebKit's default white backing so the canvas color shows through
-        // during the brief moments WebContent is mid-relayout (e.g. while
-        // dragging a pane divider). No more glaring white flashes.
-        self.webView.isOpaque = false
-        self.webView.backgroundColor = .clear
-        self.webView.scrollView.backgroundColor = .clear
-        #else
-        self.webView.setValue(false, forKey: "drawsBackground")
         #endif
 
         navDelegate.owner = self
@@ -370,17 +362,7 @@ final class PaneDropRoutingWebView: WKWebView {
 #endif
 
 #if !os(macOS)
-private var zeroHeightAccessoryAssociationKey: UInt8 = 0
-
-private final class ZeroHeightInputAccessoryView: UIView {
-    override var intrinsicContentSize: CGSize {
-        CGSize(width: UIView.noIntrinsicMetric, height: 0)
-    }
-
-    override func sizeThatFits(_ size: CGSize) -> CGSize {
-        CGSize(width: size.width, height: 0)
-    }
-}
+private var inputAssistantAssociationKey: UInt8 = 0
 
 /// WebKit customizations we can't get via public API:
 ///   • Refuse to host a `UIDropInteraction` on the WKWebView so SwiftUI's
@@ -391,8 +373,8 @@ private final class ZeroHeightInputAccessoryView: UIView {
 ///     polling is cheap and avoids ObjC-runtime method swaps that can crash
 ///     when WebKit's own dispatch expects a particular IMP shape.
 ///   • Override `inputAccessoryView` on `WKContentView` (via a safe one-time
-///     subclass swap that adds *just* a getter — no method-forwarding) so
-///     focused form fields don't show the predictive-text / shortcut bar.
+///     subclass swap) and blank `inputAssistantItem`, so focused web form
+///     fields don't show the hardware-keyboard shortcut / mic bar.
 ///   • Remove WebKit's image-analysis deferral recognizer. It can get stuck
 ///     reporting an ended deferral on iPadOS when attached to the patched
 ///     content view, and it is not needed for browser pane interactions.
@@ -484,7 +466,7 @@ private final class NoDropWebView: WKWebView {
 
         // Already swapped on a prior window-move — nothing to do.
         if NSStringFromClass(type(of: target)).hasPrefix("_ZZ_NoInputAccessory_") {
-            target.pasteConfiguration = nil
+            suppressKeyboardChrome(on: target)
             return
         }
 
@@ -492,34 +474,37 @@ private final class NoDropWebView: WKWebView {
         let newClassName = "_ZZ_NoInputAccessory_" + NSStringFromClass(originalClass)
         if let existing = NSClassFromString(newClassName) {
             object_setClass(target, existing)
-            target.pasteConfiguration = nil
+            suppressKeyboardChrome(on: target)
             return
         }
         guard let newClass = objc_allocateClassPair(originalClass, newClassName, 0) else { return }
         let accessorySelector = #selector(getter: UIResponder.inputAccessoryView)
-        // Returning a `UIInputView` here makes UIKit build conflicting remote
-        // keyboard placeholder constraints. A plain zero-height UIView keeps
-        // the accessory slot occupied without participating as an input view.
-        let accessoryBlock: @convention(block) (AnyObject) -> UIView? = { target in
+        let accessoryBlock: @convention(block) (AnyObject) -> UIView? = { _ in nil }
+        class_addMethod(newClass, accessorySelector,
+                        imp_implementationWithBlock(accessoryBlock), "@@:")
+
+        let assistantSelector = #selector(getter: UIResponder.inputAssistantItem)
+        let assistantBlock: @convention(block) (AnyObject) -> UITextInputAssistantItem = { target in
             if let existing = objc_getAssociatedObject(
-                target, &zeroHeightAccessoryAssociationKey
-            ) as? UIView {
+                target, &inputAssistantAssociationKey
+            ) as? UITextInputAssistantItem {
                 return existing
             }
 
-            let view = ZeroHeightInputAccessoryView(frame: .zero)
-            view.backgroundColor = .clear
-            view.isUserInteractionEnabled = false
+            let item = UITextInputAssistantItem()
+            item.leadingBarButtonGroups = []
+            item.trailingBarButtonGroups = []
+            item.allowsHidingShortcuts = true
             objc_setAssociatedObject(
                 target,
-                &zeroHeightAccessoryAssociationKey,
-                view,
+                &inputAssistantAssociationKey,
+                item,
                 .OBJC_ASSOCIATION_RETAIN_NONATOMIC
             )
-            return view
+            return item
         }
-        class_addMethod(newClass, accessorySelector,
-                        imp_implementationWithBlock(accessoryBlock), "@@:")
+        class_addMethod(newClass, assistantSelector,
+                        imp_implementationWithBlock(assistantBlock), "@@:")
 
         let pasteSelector = NSSelectorFromString("pasteItemProviders:")
         let pasteBlock: @convention(block) (Any, [NSItemProvider]) -> Void = { _, _ in }
@@ -533,7 +518,17 @@ private final class NoDropWebView: WKWebView {
 
         objc_registerClassPair(newClass)
         object_setClass(target, newClass)
+        suppressKeyboardChrome(on: target)
+    }
+
+    private static func suppressKeyboardChrome(on target: UIView) {
         target.pasteConfiguration = nil
+        target.inputAssistantItem.leadingBarButtonGroups = []
+        target.inputAssistantItem.trailingBarButtonGroups = []
+        target.inputAssistantItem.allowsHidingShortcuts = true
+        if target.isFirstResponder {
+            target.reloadInputViews()
+        }
     }
 }
 #endif

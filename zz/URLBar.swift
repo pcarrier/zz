@@ -35,17 +35,7 @@ struct URLBar: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField(placeholder, text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(.callout, design: .rounded))
-                .focused($focused)
-                .submitLabel(.go)
-                .autocorrectionDisabled()
-                #if !os(macOS)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-                #endif
-                .onSubmit(onSubmit)
+            field
                 .onChange(of: focused) { _, isFocused in
                     if isFocused { selectAll() }
                 }
@@ -57,7 +47,6 @@ struct URLBar: View {
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
-                .transition(.opacity)
             }
         }
         .padding(.horizontal, 10)
@@ -66,7 +55,21 @@ struct URLBar: View {
         .overlay(
             Rectangle().stroke(focused ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 1)
         )
-        .animation(.easeOut(duration: 0.12), value: focused)
+    }
+
+    @ViewBuilder
+    private var field: some View {
+        TextField(placeholder, text: $text)
+            .textFieldStyle(.plain)
+            .font(.system(.callout, design: .rounded))
+            .focused($focused)
+            .submitLabel(.go)
+            .autocorrectionDisabled()
+            #if !os(macOS)
+            .textInputAutocapitalization(.never)
+            .keyboardType(.webSearch)
+            #endif
+            .onSubmit(onSubmit)
     }
 }
 

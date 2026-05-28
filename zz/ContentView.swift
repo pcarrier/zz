@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit) && !os(macOS)
+import UIKit
+#endif
 
 struct ContentView: View {
     let windowID: WindowID
@@ -18,6 +21,7 @@ private struct BrowserScene: View {
     @State private var store: BrowserStore
     @State private var draft: String = ""
     @State private var selectedSuggestionIndex: Int? = nil
+    @State private var neutralizeKeyboardSafeArea: Bool = false
     @FocusState private var urlFocused: Bool
 
     @Environment(HistoryStore.self) private var history
@@ -51,8 +55,12 @@ private struct BrowserScene: View {
                 .frame(maxWidth: 720)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 6)
-                .transition(.opacity)
-                .allowsHitTesting(urlFocused)
+                // Consume taps across the full padded area so a tap on a
+                // suggestion's surrounding margin doesn't fall through to the
+                // tile underneath (which would focus that tile and discard
+                // the suggestion).
+                .contentShape(.rect)
+                .onTapGesture { }
             }
 
             ShortcutLayer(
@@ -71,7 +79,7 @@ private struct BrowserScene: View {
             )
             .environment(store)
         }
-        .animation(.easeOut(duration: 0.1), value: matches.isEmpty)
+        .keyboardSafeAreaNeutralized(neutralizeKeyboardSafeArea)
         .statusBarHiddenIfAvailable()
         .persistentSystemOverlaysHiddenIfAvailable()
         .onChange(of: store.focusedTabID) { _, _ in
@@ -104,28 +112,46 @@ private struct BrowserScene: View {
                 history.flushSave()
             }
         }
+        .onOpenURL { url in
+            store.openExternalURL(url.absoluteString)
+        }
+        #if canImport(UIKit) && !os(macOS)
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIResponder.keyboardWillChangeFrameNotification
+        )) { notification in
+            updateKeyboardSafeAreaNeutralization(for: notification)
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIResponder.keyboardWillHideNotification
+        )) { _ in
+            neutralizeKeyboardSafeArea = false
+        }
+        #endif
     }
 
     @ViewBuilder
     private var mainContent: some View {
         HStack(spacing: 0) {
-            BSPView(node: store.root)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if !store.parked.isEmpty {
+            Group {
+                if let zoomedID = store.zoomedTabID, store.tab(zoomedID) != nil {
+                    TileView(tabID: zoomedID).id(zoomedID)
+                } else {
+                    BSPView(node: store.root)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if !store.parked.isEmpty && store.zoomedTabID == nil {
                 SplitHandle(
                     axis: .vertical,
                     onBegin:     { store.beginSidebarDrag() },
                     onTranslate: { t in store.updateSidebarDrag(translation: t) },
                     onEnd:       { store.endSidebarDrag() }
                 )
-                .transition(.opacity)
                 SidebarView()
                     .frame(width: store.sidebarWidth)
                     .clipped()
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .animation(.easeInOut(duration: 0.22), value: store.parked.isEmpty)
     }
 
     private func commit(_ value: String) {
@@ -136,6 +162,21 @@ private struct BrowserScene: View {
         urlFocused = false
         selectedSuggestionIndex = nil
     }
+
+    #if canImport(UIKit) && !os(macOS)
+    private func updateKeyboardSafeAreaNeutralization(for notification: Notification) {
+        guard let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+            neutralizeKeyboardSafeArea = false
+            return
+        }
+
+        let screenBottom = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.screen.bounds.maxY }
+            .max() ?? endFrame.maxY
+        let overlap = max(0, screenBottom - endFrame.minY)
+        neutralizeKeyboardSafeArea = overlap > 0 && overlap <= 96
+    }
+    #endif
 }
 
 // MARK: - Shortcut layer (invisible buttons)
@@ -162,6 +203,12 @@ private struct ShortcutLayer: View {
             #endif
             shortcut("Back",             "[", action: store.backFocused)
             shortcut("Forward",          "]", action: store.forwardFocused)
+
+            // Toggle zoom on the focused tile.
+            Button("Toggle Zoom") { store.toggleZoom() }
+                .keyboardShortcut("f", modifiers: [.command, .control])
+                .opacity(0)
+                .frame(width: 0, height: 0)
 
             shortcut("Split Horizontal", "d") {
                 splitFocused(.horizontal)
@@ -208,6 +255,15 @@ private struct ShortcutLayer: View {
 }
 
 extension View {
+    @ViewBuilder
+    func keyboardSafeAreaNeutralized(_ neutralized: Bool) -> some View {
+        if neutralized {
+            ignoresSafeArea(.keyboard, edges: .bottom)
+        } else {
+            self
+        }
+    }
+
     func statusBarHiddenIfAvailable() -> some View {
         #if canImport(UIKit) && !os(macOS)
         return self.statusBarHidden(true)

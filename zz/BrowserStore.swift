@@ -234,6 +234,7 @@ final class BrowserStore {
     var tabs: [UUID: Tab] = [:]
 
     var focusURLBarTrigger: Int = 0
+    var zoomedTabID: UUID?
     private var paneLayoutRevisions: [UUID: Int] = [:]
 
     @ObservationIgnored
@@ -408,6 +409,7 @@ final class BrowserStore {
     }
 
     func close(_ tabID: UUID) {
+        if zoomedTabID == tabID { zoomedTabID = nil }
         let expandedTabIDs = root.tabIDsExpandedByRemoving(tabID)
         if let newRoot = root.removing(tabID) {
             root = newRoot
@@ -497,6 +499,29 @@ final class BrowserStore {
     func forwardFocused()  { focusedTab?.goForward() }
     func findInFocused()   { focusedTab?.find() }
     func focusURLBar()     { focusURLBarTrigger &+= 1 }
+
+    /// Toggle "zoom" — temporarily show only the focused tile, hiding the rest
+    /// of the BSP tree. Called again, restores the full layout.
+    func toggleZoom() {
+        if zoomedTabID != nil {
+            zoomedTabID = nil
+        } else if let id = focusedTabID {
+            zoomedTabID = id
+        }
+        scheduleSave()
+    }
+
+    /// Handle a URL handed in from outside the app (e.g. the system passing
+    /// us a tap from another app while we are the default browser). Loads it
+    /// in the focused tab if blank; otherwise splits a new pane to its right.
+    func openExternalURL(_ urlString: String) {
+        guard let tab = focusedTab else { return }
+        if tab.isBlank {
+            tab.load(urlString)
+        } else if let id = focusedTabID {
+            split(id, axis: .vertical, side: .after, loadURL: urlString)
+        }
+    }
 
     // MARK: Parking
 
