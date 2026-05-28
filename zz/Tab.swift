@@ -43,6 +43,9 @@ final class Tab {
     @ObservationIgnored
     private weak var history: HistoryStore?
 
+    @ObservationIgnored
+    var onPersistenceChange: (@MainActor () -> Void)?
+
     init(id: UUID = UUID(), url: String = "", title: String? = nil,
          scrollOffset: CGPoint = .zero, history: HistoryStore?) {
         self.id = id
@@ -121,6 +124,7 @@ final class Tab {
         guard let target = URLNormalizer.resolve(trimmed) else { return }
         pendingScrollRestore = nil  // explicit nav cancels any pending restore
         currentURL = target.absoluteString
+        notifyPersistenceChanged()
         webView.load(URLRequest(url: target))
     }
 
@@ -144,6 +148,10 @@ final class Tab {
         #endif
     }
 
+    private func notifyPersistenceChanged() {
+        onPersistenceChange?()
+    }
+
     private func wire() {
         observations = [
             webView.observe(\.url, options: [.new]) { [weak self] view, _ in
@@ -154,6 +162,7 @@ final class Tab {
                     if urlString != "about:blank" {
                         self.history?.record(url: urlString, title: self.title)
                     }
+                    self.notifyPersistenceChanged()
                 }
             },
             webView.observe(\.title, options: [.new]) { [weak self] view, _ in
@@ -164,6 +173,7 @@ final class Tab {
                     if !self.currentURL.isEmpty, self.currentURL != "about:blank" {
                         self.history?.record(url: self.currentURL, title: t)
                     }
+                    self.notifyPersistenceChanged()
                 }
             },
             webView.observe(\.canGoBack, options: [.new]) { [weak self] view, _ in

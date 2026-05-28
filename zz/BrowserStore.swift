@@ -1,7 +1,13 @@
 import Foundation
 import CoreGraphics
 import Observation
+import OSLog
 import SwiftUI
+
+private let persistenceLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "surf.zz",
+    category: "Persistence"
+)
 
 // MARK: - BSP tree (leaves carry a Tab id)
 
@@ -259,16 +265,22 @@ final class BrowserStore {
             }
             self.tabs = loadedTabs
             self.root = snap.root
-            self.parked = snap.parked
             self.sidebarWidth = snap.sidebarWidth
-            self.focusedTabID = snap.focusedTabID ?? snap.root.tabIDs().first
-            // Ensure every leaf has a tab record; if not, create a blank one.
-            for tabID in snap.root.tabIDs() where tabs[tabID] == nil {
+            // Ensure every visible leaf has a tab record; if not, create a blank one.
+            for tabID in root.tabIDs() where tabs[tabID] == nil {
                 tabs[tabID] = Tab(id: tabID, history: history)
             }
+            self.parked = Self.sanitizedParkedIDs(snap.parked, tabs: tabs, root: root)
+            if let focused = snap.focusedTabID,
+               root.contains(focused),
+               tabs[focused] != nil {
+                self.focusedTabID = focused
+            } else {
+                self.focusedTabID = root.tabIDs().first { tabs[$0] != nil }
+            }
             // Drop tabs that aren't referenced anywhere.
-            let referenced = Set(snap.root.tabIDs() + snap.parked)
-            for key in tabs.keys where !referenced.contains(key) {
+            let referenced = Set(root.tabIDs() + parked)
+            for key in Array(tabs.keys) where !referenced.contains(key) {
                 tabs[key] = nil
             }
         } else {
@@ -278,6 +290,32 @@ final class BrowserStore {
             self.parked = []
             self.focusedTabID = tab.id
             self.sidebarWidth = 220
+        }
+        installPersistenceCallbacks()
+    }
+
+    private func installPersistenceCallbacks() {
+        for tab in tabs.values {
+            attachPersistenceCallback(to: tab)
+        }
+    }
+
+    private func attachPersistenceCallback(to tab: Tab) {
+        tab.onPersistenceChange = { [weak self] in
+            self?.scheduleSave()
+        }
+    }
+
+    private static func sanitizedParkedIDs(_ parked: [UUID], tabs: [UUID: Tab], root: BSPNode) -> [UUID] {
+        var seen = Set<UUID>()
+        return parked.filter { tabID in
+            guard tabs[tabID] != nil,
+                  !root.contains(tabID),
+                  !seen.contains(tabID) else {
+                return false
+            }
+            seen.insert(tabID)
+            return true
         }
     }
 
@@ -307,6 +345,7 @@ final class BrowserStore {
     @discardableResult
     private func makeBlankTab() -> UUID {
         let tab = Tab(history: history)
+        attachPersistenceCallback(to: tab)
         tabs[tab.id] = tab
         return tab.id
     }
@@ -568,12 +607,22 @@ final class BrowserStore {
     }
 
     private func currentSnapshot() -> WindowSnapshot {
-        let referenced = Set(root.tabIDs() + parked)
+        let visibleTabIDs = root.tabIDs()
+        let validParked = Self.sanitizedParkedIDs(parked, tabs: tabs, root: root)
+        let referenced = Set(visibleTabIDs + validParked)
+        let validFocusedTabID: UUID?
+        if let focusedTabID,
+           root.contains(focusedTabID),
+           tabs[focusedTabID] != nil {
+            validFocusedTabID = focusedTabID
+        } else {
+            validFocusedTabID = visibleTabIDs.first { tabs[$0] != nil }
+        }
         let tabRecords: [TabRecord] = referenced.compactMap { id in
             tabs[id].map(TabRecord.init)
         }
         return WindowSnapshot(
-            root: root, focusedTabID: focusedTabID, parked: parked,
+            root: root, focusedTabID: validFocusedTabID, parked: validParked,
             tabs: tabRecords, sidebarWidth: sidebarWidth)
     }
 
@@ -603,9 +652,7 @@ final class BrowserStore {
             let data = try JSONEncoder().encode(snapshot)
             try data.write(to: url, options: .atomic)
         } catch {
-            #if DEBUG
-            print("BrowserStore save failed:", error)
-            #endif
+            persistenceLogger.error("BrowserStore save failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -691,9 +738,7 @@ final class HistoryStore {
             let data = try JSONEncoder().encode(entries)
             try data.write(to: fileURL, options: .atomic)
         } catch {
-            #if DEBUG
-            print("HistoryStore save failed:", error)
-            #endif
+            persistenceLogger.error("HistoryStore save failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -747,6 +792,12 @@ private extension Character {
 // MARK: - URL normalization
 
 enum URLNormalizer {
+    private static let searchQueryAllowed: CharacterSet = {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&=?+#")
+        return allowed
+    }()
+
     static func resolve(_ input: String) -> URL? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -755,7 +806,7 @@ enum URLNormalizer {
             return url
         }
         if trimmed.contains(" ") || !trimmed.contains(".") {
-            let q = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed
+            let q = trimmed.addingPercentEncoding(withAllowedCharacters: searchQueryAllowed) ?? trimmed
             return URL(string: "https://duckduckgo.com/?q=\(q)")
         }
         return URL(string: "https://" + trimmed)

@@ -13,6 +13,10 @@ struct BrowserUtilityTests {
         #expect(URLNormalizer.resolve("open ai")?.absoluteString == "https://duckduckgo.com/?q=open%20ai")
     }
 
+    @Test func searchTermsEscapeQueryDelimiters() {
+        #expect(URLNormalizer.resolve("a&b=c")?.absoluteString == "https://duckduckgo.com/?q=a%26b%3Dc")
+    }
+
     @Test func droppedTextExtractsFirstLink() {
         #expect(DroppedURL.string(fromText: "Read https://example.com/path now") == "https://example.com/path")
     }
