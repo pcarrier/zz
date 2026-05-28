@@ -103,21 +103,10 @@ private struct EmptyTileState: View {
     var onTap: () -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "safari")
-                .font(.system(size: 44))
-                .foregroundStyle(.tertiary)
-            Text("New Tile")
-                .font(.title3.weight(.medium))
-                .foregroundStyle(.secondary)
-            Text("Type a URL or press ⌘L")
-                .font(.callout)
-                .foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.secondary.opacity(0.05))
-        .contentShape(.rect)
-        .onTapGesture(perform: onTap)
+        Color.secondary.opacity(0.05)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(.rect)
+            .onTapGesture(perform: onTap)
     }
 }
 

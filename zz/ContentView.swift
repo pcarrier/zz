@@ -22,6 +22,7 @@ private struct BrowserScene: View {
     @State private var draft: String = ""
     @State private var selectedSuggestionIndex: Int? = nil
     @State private var neutralizeKeyboardSafeArea: Bool = false
+    @State private var urlEditingTabID: UUID?
     @FocusState private var urlFocused: Bool
 
     @Environment(HistoryStore.self) private var history
@@ -50,7 +51,7 @@ private struct BrowserScene: View {
                 SuggestionList(
                     suggestions: matches,
                     selectedIndex: selectedSuggestionIndex,
-                    onSelect: { commit($0.url) }
+                    onSelect: selectSuggestion
                 )
                 .frame(maxWidth: 720)
                 .padding(.horizontal, 16)
@@ -83,18 +84,25 @@ private struct BrowserScene: View {
         .statusBarHiddenIfAvailable()
         .persistentSystemOverlaysHiddenIfAvailable()
         .onChange(of: store.focusedTabID) { _, _ in
+            // Sync the URL field to the new tile's URL, but don't force the
+            // URL bar to unfocus — clicking a webview already resigns first
+            // responder, and explicit unfocus here races with focusURLBar()
+            // requests that change the focused tile and request bar focus
+            // in the same tick (e.g. tapping an empty pane).
             draft = store.focusedTab?.currentURL ?? ""
-            urlFocused = false
+            if urlFocused { urlEditingTabID = store.focusedTabID }
             selectedSuggestionIndex = nil
         }
         .onChange(of: store.focusedTab?.currentURL ?? "") { _, new in
             if !urlFocused { draft = new }
         }
         .onChange(of: store.focusURLBarTrigger) { _, _ in
-            urlFocused = true
+            urlEditingTabID = store.focusedTabID
+            if !urlFocused { urlFocused = true }
         }
         .onChange(of: urlFocused) { _, focused in
             if focused {
+                urlEditingTabID = store.focusedTabID
                 draft = store.focusedTab?.currentURL ?? ""
             } else {
                 selectedSuggestionIndex = nil
@@ -156,11 +164,26 @@ private struct BrowserScene: View {
 
     private func commit(_ value: String) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let tab = store.focusedTab else { return }
+        guard !trimmed.isEmpty else { return }
+
+        let targetID = tabIDForCommit()
+        guard let targetID, let tab = store.tab(targetID) else { return }
+        store.focus(targetID)
         tab.load(trimmed)
         draft = tab.currentURL
         urlFocused = false
+        urlEditingTabID = targetID
         selectedSuggestionIndex = nil
+    }
+
+    private func selectSuggestion(_ entry: HistoryEntry) {
+        commit(entry.url)
+    }
+
+    private func tabIDForCommit() -> UUID? {
+        if let id = urlEditingTabID, store.isMainPaneHost(id) { return id }
+        if let id = store.focusedTabID, store.isMainPaneHost(id) { return id }
+        return nil
     }
 
     #if canImport(UIKit) && !os(macOS)
@@ -255,13 +278,8 @@ private struct ShortcutLayer: View {
 }
 
 extension View {
-    @ViewBuilder
     func keyboardSafeAreaNeutralized(_ neutralized: Bool) -> some View {
-        if neutralized {
-            ignoresSafeArea(.keyboard, edges: .bottom)
-        } else {
-            self
-        }
+        ignoresSafeArea(.keyboard, edges: neutralized ? .bottom : [])
     }
 
     func statusBarHiddenIfAvailable() -> some View {

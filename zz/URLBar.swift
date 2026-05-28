@@ -81,34 +81,11 @@ struct SuggestionList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(suggestions.enumerated()), id: \.element.id) { idx, entry in
-                let isSelected = idx == selectedIndex
-                Button {
-                    onSelect(entry)
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
-                            .frame(width: 16)
-                        VStack(alignment: .leading, spacing: 1) {
-                            if let title = entry.title, !title.isEmpty {
-                                Text(title)
-                                    .font(.callout)
-                                    .lineLimit(1)
-                            }
-                            Text(entry.url)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
+                SuggestionRow(
+                    entry: entry,
+                    isSelected: idx == selectedIndex,
+                    onSelect: onSelect
+                )
                 if idx < suggestions.count - 1 {
                     Divider().opacity(0.4)
                 }
@@ -119,5 +96,53 @@ struct SuggestionList: View {
             Rectangle().stroke(.separator.opacity(0.4))
         )
         .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
+    }
+}
+
+private struct SuggestionRow: View {
+    let entry: HistoryEntry
+    let isSelected: Bool
+    let onSelect: (HistoryEntry) -> Void
+
+    @State private var didSelect = false
+
+    var body: some View {
+        Button {
+            selectOnce()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 1) {
+                    if let title = entry.title, !title.isEmpty {
+                        Text(title)
+                            .font(.callout)
+                            .lineLimit(1)
+                    }
+                    Text(entry.url)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in selectOnce() }
+        )
+    }
+
+    private func selectOnce() {
+        guard !didSelect else { return }
+        didSelect = true
+        onSelect(entry)
     }
 }

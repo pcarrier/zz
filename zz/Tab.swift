@@ -34,6 +34,12 @@ final class Tab {
     @ObservationIgnored
     private var pendingScrollRestore: CGPoint?
 
+    /// Continuously mirrored from `webView.scrollView.contentOffset` so we
+    /// have a pre-termination value to restore from when WebContent gets
+    /// killed (the live `contentOffset` resets to .zero on kill).
+    @ObservationIgnored
+    private var lastScrollOffset: CGPoint = .zero
+
     @ObservationIgnored
     private let uiDelegate = SameWindowUIDelegate()
 
@@ -130,7 +136,9 @@ final class Tab {
 
     var scrollOffset: CGPoint {
         #if !os(macOS)
-        return webView.scrollView.contentOffset
+        // Return the mirrored value: stays valid even if WebContent was
+        // terminated and `scrollView.contentOffset` was reset to .zero.
+        return lastScrollOffset
         #else
         return .zero
         #endif
@@ -150,6 +158,17 @@ final class Tab {
 
     private func notifyPersistenceChanged() {
         onPersistenceChange?()
+    }
+
+    /// Recover from a WebContent process termination: reload the page and
+    /// restore the scroll offset we mirrored before the kill.
+    func recoverFromTermination() {
+        #if !os(macOS)
+        if lastScrollOffset != .zero {
+            pendingScrollRestore = lastScrollOffset
+        }
+        #endif
+        webView.reload()
     }
 
     private func wire() {
@@ -211,6 +230,18 @@ final class Tab {
                         sv.contentInset = .zero
                         self.resettingInsets = false
                     }
+                }
+            }
+        )
+        observations.append(
+            webView.scrollView.observe(\.contentOffset, options: [.new]) { [weak self] sv, _ in
+                let offset = sv.contentOffset
+                MainActor.assumeIsolated {
+                    // Skip zero updates: a WebContent termination wipes the
+                    // offset to .zero and would otherwise clobber the
+                    // pre-termination value we need for recovery.
+                    guard offset != .zero else { return }
+                    self?.lastScrollOffset = offset
                 }
             }
         )
@@ -544,13 +575,25 @@ private final class NoDropWebView: WKWebView {
 #endif
 
 /// Forwards `didFinish` navigation events back to the owning `Tab` so it can
-/// run post-load logic (e.g. restoring a saved scroll offset).
+/// run post-load logic (e.g. restoring a saved scroll offset). Also reloads
+/// the page when WebKit kills the WebContent process — without recovery, the
+/// `WKWebView` keeps its frame but shows blank ("the panes go black").
 private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
     weak var owner: Tab?
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor [weak owner] in
             owner?.didFinishNavigation()
+        }
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // iOS terminates WebContent under memory pressure, especially with
+        // multiple webviews loaded. Reload to bring the page back, and
+        // restore the pre-termination scroll position via the cached
+        // `lastScrollOffset` so the user lands where they left off.
+        Task { @MainActor [weak owner] in
+            owner?.recoverFromTermination()
         }
     }
 }
