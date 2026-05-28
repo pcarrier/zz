@@ -104,6 +104,29 @@ enum BSPNode: Codable, Identifiable, Hashable {
         }
     }
 
+    func tabIDToFocusAfterRemoving(_ tabID: UUID) -> UUID? {
+        switch self {
+        case .leaf:
+            return nil
+        case .split(_, let axis, _, let a, let b):
+            if a.contains(tabID) {
+                if case .leaf = a {
+                    let direction: Direction = axis == .horizontal ? .down : .right
+                    return b.edgeLeaf(opposite: direction)
+                }
+                return a.tabIDToFocusAfterRemoving(tabID)
+            }
+            if b.contains(tabID) {
+                if case .leaf = b {
+                    let direction: Direction = axis == .horizontal ? .up : .left
+                    return a.edgeLeaf(opposite: direction)
+                }
+                return b.tabIDToFocusAfterRemoving(tabID)
+            }
+            return nil
+        }
+    }
+
     func settingRatio(_ ratio: Double, for splitID: UUID) -> BSPNode {
         switch self {
         case .leaf: return self
@@ -450,11 +473,12 @@ final class BrowserStore {
     func close(_ tabID: UUID) {
         if zoomedTabID == tabID { zoomedTabID = nil }
         let expandedTabIDs = root.tabIDsExpandedByRemoving(tabID)
+        let focusAfterClose = root.tabIDToFocusAfterRemoving(tabID)
         if let newRoot = root.removing(tabID) {
             root = newRoot
             tabs[tabID] = nil
             if focusedTabID == tabID {
-                focusedTabID = newRoot.tabIDs().first
+                focusedTabID = focusAfterClose ?? newRoot.tabIDs().first
             }
         } else {
             // Only-tab close: replace with a fresh blank.

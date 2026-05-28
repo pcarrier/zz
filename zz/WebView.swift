@@ -117,7 +117,7 @@ extension _Representable {
         /// into WebKit's gesture system (including sub-iframe scroll routing).
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
             let result = super.hitTest(point, with: event)
-            if event != nil, let r = result, r !== self {
+            if countsAsClickToFocus(event), let r = result, r !== self {
                 let now = CACurrentMediaTime()
                 if now - lastInteractionAt > 0.1 {
                     lastInteractionAt = now
@@ -125,6 +125,16 @@ extension _Representable {
                 }
             }
             return result
+        }
+
+        private func countsAsClickToFocus(_ event: UIEvent?) -> Bool {
+            guard let event else { return false }
+            switch event.type {
+            case .touches, .presses:
+                return true
+            default:
+                return false
+            }
         }
 
         func setLayoutRevision(_ revision: Int) {

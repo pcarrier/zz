@@ -174,6 +174,7 @@ private struct BrowserScene: View {
         urlFocused = false
         urlEditingTabID = targetID
         selectedSuggestionIndex = nil
+        tab.focusForBrowsing()
     }
 
     private func selectSuggestion(_ entry: HistoryEntry) {

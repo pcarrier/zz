@@ -110,6 +110,26 @@ final class Tab {
     func goForward() { webView.goForward() }
     func stop()      { webView.stopLoading() }
 
+    func focusForBrowsing() {
+        #if os(macOS)
+        DispatchQueue.main.async { [weak webView] in
+            guard let webView else { return }
+            webView.window?.makeFirstResponder(webView)
+        }
+        #else
+        DispatchQueue.main.async { [weak webView] in
+            guard let webView else { return }
+            if let contentView = webView.scrollView.subviews.first(where: { subview in
+                NSStringFromClass(type(of: subview)).contains("WKContent")
+            }) {
+                contentView.becomeFirstResponder()
+            } else {
+                webView.becomeFirstResponder()
+            }
+        }
+        #endif
+    }
+
     func find() {
         #if !os(macOS)
         webView.findInteraction?.presentFindNavigator(showingReplace: false)

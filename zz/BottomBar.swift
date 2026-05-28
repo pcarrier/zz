@@ -38,7 +38,8 @@ struct BottomBar: View {
             actionButtons(tab: tab)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.top, 12)
+        .padding(.bottom, 0)
         .background(.bar)
         .overlay(alignment: .top) {
             Rectangle().fill(.separator.opacity(0.5)).frame(height: 0.5)
