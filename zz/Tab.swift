@@ -74,8 +74,25 @@ final class Tab {
         self.webView.uiDelegate = uiDelegate
         self.webView.navigationDelegate = navDelegate
         #if !os(macOS)
+        self.webView.isFindInteractionEnabled = true
+        #endif
+        #if !os(macOS)
         self.webView.scrollView.contentInsetAdjustmentBehavior = .never
         self.webView.scrollView.automaticallyAdjustsScrollIndicatorInsets = false
+        // Honor pages that lock scrolling: only allow panning when there is
+        // actually scrollable content. WKWebView defaults `alwaysBounce*` to
+        // true, which lets users drag and rubber-band even on pages with
+        // `overflow: hidden` or content shorter than the viewport.
+        self.webView.scrollView.alwaysBounceVertical = false
+        self.webView.scrollView.alwaysBounceHorizontal = false
+        // Hide WebKit's default white backing so the canvas color shows through
+        // during the brief moments WebContent is mid-relayout (e.g. while
+        // dragging a pane divider). No more glaring white flashes.
+        self.webView.isOpaque = false
+        self.webView.backgroundColor = .clear
+        self.webView.scrollView.backgroundColor = .clear
+        #else
+        self.webView.setValue(false, forKey: "drawsBackground")
         #endif
 
         navDelegate.owner = self
@@ -91,6 +108,12 @@ final class Tab {
     func goBack()    { webView.goBack() }
     func goForward() { webView.goForward() }
     func stop()      { webView.stopLoading() }
+
+    func find() {
+        #if !os(macOS)
+        webView.findInteraction?.presentFindNavigator(showingReplace: false)
+        #endif
+    }
 
     func go(to item: WKBackForwardListItem) { webView.go(to: item) }
 

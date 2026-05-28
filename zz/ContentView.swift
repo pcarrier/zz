@@ -155,13 +155,18 @@ private struct ShortcutLayer: View {
             shortcut("Focus URL Bar",    "l", action: store.focusURLBar)
 
             shortcut("Reload",           "r", action: store.reloadFocused)
+            #if !os(macOS)
+            // On macOS, the standard Edit > Find menu item handles ⌘F natively
+            // for WKWebView via the responder chain — don't shadow it here.
+            shortcut("Find on Page",     "f", action: store.findInFocused)
+            #endif
             shortcut("Back",             "[", action: store.backFocused)
             shortcut("Forward",          "]", action: store.forwardFocused)
 
-            shortcut("Split Horizontal", "h", modifiers: [.command, .option]) {
+            shortcut("Split Horizontal", "d") {
                 splitFocused(.horizontal)
             }
-            shortcut("Split Vertical",   "v", modifiers: [.command, .option]) {
+            shortcut("Split Vertical",   "d", modifiers: [.command, .shift]) {
                 splitFocused(.vertical)
             }
 

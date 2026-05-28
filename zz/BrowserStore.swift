@@ -495,6 +495,7 @@ final class BrowserStore {
     func reloadFocused()   { focusedTab?.reload() }
     func backFocused()     { focusedTab?.goBack() }
     func forwardFocused()  { focusedTab?.goForward() }
+    func findInFocused()   { focusedTab?.find() }
     func focusURLBar()     { focusURLBarTrigger &+= 1 }
 
     // MARK: Parking

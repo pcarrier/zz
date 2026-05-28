@@ -86,10 +86,10 @@ struct BottomBar: View {
                           help: "Park to sidebar (⌘N)")
             BarIconButton(name: "rectangle.split.1x2", enabled: tab != nil,
                           action: { if let id = store.focusedTabID { store.split(id, axis: .horizontal) } },
-                          help: "Split horizontal (⌥⌘H)")
+                          help: "Split horizontal (⌘D)")
             BarIconButton(name: "rectangle.split.2x1", enabled: tab != nil,
                           action: { if let id = store.focusedTabID { store.split(id, axis: .vertical) } },
-                          help: "Split vertical (⌥⌘V)")
+                          help: "Split vertical (⇧⌘D)")
             BarIconButton(name: "macwindow.badge.plus", enabled: true,
                           action: { openWindow(value: WindowID()) },
                           help: "New window (⇧⌘N)")
