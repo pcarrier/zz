@@ -550,9 +550,8 @@ final class BrowserStore {
         scheduleSave()
     }
 
-    /// Handle a URL handed in from outside the app (e.g. the system passing
-    /// us a tap from another app while we are the default browser). Loads it
-    /// in the focused tab if blank; otherwise splits a new pane to its right.
+    /// Handle a URL handed in from outside the app. Loads it in the focused
+    /// tab if blank; otherwise splits a new pane to its right.
     func openExternalURL(_ urlString: String) {
         guard let tab = focusedTab else { return }
         if tab.isBlank {

@@ -25,34 +25,6 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Pierre Carrier. All rights reserved.</string>
 
-	<!-- Default-browser registration: declare http + https handler.
-	     iOS lists the app under Settings > Apps > Default Apps > Browser
-	     when these URL types are present AND the
-	     com.apple.developer.web-browser entitlement is granted. -->
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Viewer</string>
-			<key>CFBundleURLName</key>
-			<string>HTTP</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>http</string>
-			</array>
-		</dict>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Viewer</string>
-			<key>CFBundleURLName</key>
-			<string>HTTPS</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>https</string>
-			</array>
-		</dict>
-	</array>
-
 	<!-- iOS / iPadOS scene + chrome configuration -->
 	<key>UIApplicationSceneManifest</key>
 	<dict>
