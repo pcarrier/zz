@@ -49,11 +49,14 @@ struct URLBar: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color.secondary.opacity(0.12))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(Color.secondary.opacity(focused ? 0.14 : 0.10))
+        .clipShape(.rect(cornerRadius: 7, style: .continuous))
         .overlay(
-            Rectangle().stroke(focused ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(focused ? Color.accentColor.opacity(0.48) : Color.secondary.opacity(0.18),
+                        lineWidth: 0.75)
         )
     }
 

@@ -13,7 +13,7 @@ struct BottomBar: View {
 
     var body: some View {
         let tab = store.focusedTab
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             navButtons(tab: tab)
             URLBar(text: $draft, focused: $urlFocused, onSubmit: submit)
                 .onKeyPress(.downArrow) { moveSelection(+1) }
@@ -37,12 +37,12 @@ struct BottomBar: View {
                 .layoutPriority(1)
             actionButtons(tab: tab)
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
-        .padding(.bottom, 0)
+        .padding(.horizontal, 10)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
         .background(.bar)
         .overlay(alignment: .top) {
-            Rectangle().fill(.separator.opacity(0.5)).frame(height: 0.5)
+            Rectangle().fill(.separator.opacity(0.28)).frame(height: 0.5)
         }
     }
 
@@ -171,7 +171,7 @@ private struct HistoryMenu: View {
     private var iconLabel: some View {
         Image(systemName: icon)
             .font(.system(size: 14, weight: .medium))
-            .frame(width: 32, height: 32)
+            .frame(width: 30, height: 30)
             .contentShape(.rect)
     }
 
@@ -193,7 +193,7 @@ private struct BarIconButton: View {
         Button(action: action) {
             Image(systemName: name)
                 .font(.system(size: 14, weight: .medium))
-                .frame(width: 32, height: 32)
+                .frame(width: 30, height: 30)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)

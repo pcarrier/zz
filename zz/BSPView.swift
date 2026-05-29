@@ -1,6 +1,6 @@
 import SwiftUI
 
-private let dividerThickness: CGFloat = 12
+private let splitHandleHitThickness: CGFloat = 14
 
 struct BSPView: View {
     let node: BSPNode
@@ -15,49 +15,50 @@ struct BSPView: View {
 
         case .split(let id, let axis, let ratio, let first, let second):
             GeometryReader { proxy in
-                let total = axis == .horizontal ? proxy.size.height : proxy.size.width
-                let usable = max(0, total - dividerThickness)
-                let firstSize = usable * ratio
-                let secondSize = usable - firstSize
-                Group {
+                let length = axis == .horizontal ? proxy.size.height : proxy.size.width
+                let firstSize = max(0, length * ratio)
+                let secondSize = max(0, length - firstSize)
+                ZStack(alignment: .topLeading) {
                     if axis == .horizontal {
-                        VStack(spacing: 0) {
-                            BSPView(node: first).frame(height: firstSize)
-                            SplitHandle(
-                                axis: axis,
-                                thickness: dividerThickness,
-                                onBegin:     { store.beginRatioDrag(id) },
-                                onTranslate: { t in
-                                    store.updateRatioDrag(id, usable: usable, translation: t)
-                                },
-                                onEnd:       { store.endRatioDrag(id) }
-                            )
-                            BSPView(node: second).frame(height: secondSize)
-                        }
+                        BSPView(node: first)
+                            .frame(width: proxy.size.width, height: firstSize)
+                            .position(x: proxy.size.width / 2, y: firstSize / 2)
+                        BSPView(node: second)
+                            .frame(width: proxy.size.width, height: secondSize)
+                            .position(x: proxy.size.width / 2,
+                                      y: firstSize + secondSize / 2)
+                        splitHandle(id: id, axis: axis, usable: length)
+                            .position(x: proxy.size.width / 2, y: firstSize)
                     } else {
-                        HStack(spacing: 0) {
-                            BSPView(node: first).frame(width: firstSize)
-                            SplitHandle(
-                                axis: axis,
-                                thickness: dividerThickness,
-                                onBegin:     { store.beginRatioDrag(id) },
-                                onTranslate: { t in
-                                    store.updateRatioDrag(id, usable: usable, translation: t)
-                                },
-                                onEnd:       { store.endRatioDrag(id) }
-                            )
-                            BSPView(node: second).frame(width: secondSize)
-                        }
+                        BSPView(node: first)
+                            .frame(width: firstSize, height: proxy.size.height)
+                            .position(x: firstSize / 2, y: proxy.size.height / 2)
+                        BSPView(node: second)
+                            .frame(width: secondSize, height: proxy.size.height)
+                            .position(x: firstSize + secondSize / 2,
+                                      y: proxy.size.height / 2)
+                        splitHandle(id: id, axis: axis, usable: length)
+                            .position(x: firstSize, y: proxy.size.height / 2)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
+
+    private func splitHandle(id: UUID, axis: BSPNode.Axis, usable: CGFloat) -> some View {
+        SplitHandle(
+            axis: axis,
+            thickness: splitHandleHitThickness,
+            onBegin:     { store.beginRatioDrag(id) },
+            onTranslate: { t in store.updateRatioDrag(id, usable: usable, translation: t) },
+            onEnd:       { store.endRatioDrag(id) }
+        )
+    }
 }
 
 /// Draggable divider used by the BSP renderer and the sidebar splitter.
-/// Hit area equals `thickness`; the visible line is always a 1pt hairline.
+/// Hit area equals `thickness`; the visible line is only a quiet hairline.
 ///
 /// Callers receive `cumulative` translation from the gesture's start (not deltas)
 /// so they can compute the new size from a stable starting reference, which
@@ -90,9 +91,9 @@ struct SplitHandle: View {
                    height: axis == .horizontal ? thickness : nil)
             .overlay {
                 Rectangle()
-                    .fill(Color.gray.opacity(0.25))
-                    .frame(width: axis == .vertical ? 1 : nil,
-                           height: axis == .horizontal ? 1 : nil)
+                    .fill(.separator.opacity(0.22))
+                    .frame(width: axis == .vertical ? 0.5 : nil,
+                           height: axis == .horizontal ? 0.5 : nil)
             }
             .contentShape(.rect)
             .gesture(

@@ -48,6 +48,7 @@ struct TileView: View {
             }
         }
         .background(Color.canvas)
+        .clipped()
         .overlay(alignment: .top) {
             if tab.isLoading,
                tab.estimatedProgress > 0, tab.estimatedProgress < 1 {
@@ -67,10 +68,10 @@ struct TileView: View {
             }
         }
         .overlay(
-            Rectangle()
-                .strokeBorder(active ? Color.accentColor : Color.clear, lineWidth: 1.5)
+            ActivePaneOutline()
+                .opacity(active ? 1 : 0)
+                .allowsHitTesting(false)
         )
-        .clipShape(.rect)
         .contentShape(.rect)
         .onTapGesture { store.focus(tabID) }
         .background(
@@ -94,6 +95,14 @@ struct TileView: View {
         case .parkedTab(let parkedTabID):
             store.dropParked(parkedTabID, on: tabID, zone: zone)
         }
+    }
+}
+
+private struct ActivePaneOutline: View {
+    var body: some View {
+        Rectangle()
+            .stroke(Color.accentColor.opacity(0.72), lineWidth: 1)
+            .padding(-1)
     }
 }
 
