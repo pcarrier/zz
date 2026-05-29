@@ -45,7 +45,6 @@ private struct BrowserScene: View {
             Color.canvas.ignoresSafeArea()
             mainContent
                 .environment(store)
-                .ignoresSafeArea(.keyboard, edges: .bottom)
 
             if !matches.isEmpty {
                 SuggestionList(
