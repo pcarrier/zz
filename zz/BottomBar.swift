@@ -15,7 +15,13 @@ struct BottomBar: View {
         let tab = store.focusedTab
         HStack(spacing: 6) {
             navButtons(tab: tab)
-            URLBar(text: $draft, focused: $urlFocused, onSubmit: submit)
+            URLBar(
+                text: $draft,
+                focused: $urlFocused,
+                findEnabled: tab != nil && !(tab?.isBlank ?? true),
+                onFind: { store.findInFocused() },
+                onSubmit: submit
+            )
                 .onKeyPress(.downArrow) { moveSelection(+1) }
                 .onKeyPress(.upArrow)   { moveSelection(-1) }
                 .onKeyPress(.escape) {
@@ -30,8 +36,6 @@ struct BottomBar: View {
                     return .ignored
                 }
                 .onChange(of: draft) { _, _ in
-                    // typing resets the selection so the user's text is what
-                    // submit will commit until they explicitly arrow-pick again.
                     selectedSuggestionIndex = nil
                 }
                 .layoutPriority(1)
@@ -45,8 +49,6 @@ struct BottomBar: View {
             Rectangle().fill(.separator.opacity(0.28)).frame(height: 0.5)
         }
     }
-
-    // MARK: Sections
 
     @ViewBuilder
     private func navButtons(tab: Tab?) -> some View {
@@ -67,14 +69,7 @@ struct BottomBar: View {
                 primaryAction: { tab?.goForward() },
                 enabled: tab?.canGoForward ?? false
             )
-            BarIconButton(
-                name: (tab?.isLoading == true) ? "xmark" : "arrow.clockwise",
-                enabled: tab != nil,
-                action: {
-                    if tab?.isLoading == true { tab?.stop() } else { tab?.reload() }
-                },
-                help: tab?.isLoading == true ? "Stop" : "Reload (⌘R)"
-            )
+            ReloadControl(tab: tab)
         }
     }
 
@@ -108,8 +103,6 @@ struct BottomBar: View {
         }
     }
 
-    // MARK: Actions
-
     private func submit() {
         if let idx = selectedSuggestionIndex, idx >= 0, idx < matches.count {
             onCommit(matches[idx].url)
@@ -128,7 +121,54 @@ struct BottomBar: View {
     }
 }
 
-// MARK: - Back/Forward with long-press menu
+private struct ReloadControl: View {
+    let tab: Tab?
+    @State private var suppressNextTap = false
+
+    var body: some View {
+        if tab?.isLoading == true {
+            BarIconButton(
+                name: "xmark",
+                enabled: tab != nil,
+                action: { tab?.stop() },
+                help: "Stop"
+            )
+        } else {
+            Button {
+                if suppressNextTap {
+                    suppressNextTap = false
+                } else {
+                    tab?.reload()
+                }
+            } label: {
+                iconLabel
+            }
+            .buttonStyle(.plain)
+            .disabled(tab == nil)
+            .opacity(tab == nil ? 0.35 : 1)
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.45)
+                    .onEnded { _ in
+                        guard tab != nil else { return }
+                        suppressNextTap = true
+                        tab?.forceReload()
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(700))
+                            suppressNextTap = false
+                        }
+                    }
+            )
+            .help("Reload (⌘R), Force Reload (long-press or ⇧⌘R)")
+        }
+    }
+
+    private var iconLabel: some View {
+        Image(systemName: "arrow.clockwise")
+            .font(.system(size: 14, weight: .medium))
+            .frame(width: 30, height: 30)
+            .contentShape(.rect)
+    }
+}
 
 private struct HistoryMenu: View {
     let tab: Tab?
@@ -180,8 +220,6 @@ private struct HistoryMenu: View {
         return item.url.host(percentEncoded: false) ?? item.url.absoluteString
     }
 }
-
-// MARK: - Icon button
 
 private struct BarIconButton: View {
     let name: String

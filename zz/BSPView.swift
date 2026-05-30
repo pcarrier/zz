@@ -57,13 +57,6 @@ struct BSPView: View {
     }
 }
 
-/// Draggable divider used by the BSP renderer and the sidebar splitter.
-/// Hit area equals `thickness`; the visible line is only a quiet hairline.
-///
-/// Callers receive `cumulative` translation from the gesture's start (not deltas)
-/// so they can compute the new size from a stable starting reference, which
-/// avoids jumps if SwiftUI rebuilds the handle mid-drag (any internal
-/// `@State` "lastTranslation" can be lost across tree rebuilds).
 struct SplitHandle: View {
     let axis: BSPNode.Axis
     var thickness: CGFloat = 12
@@ -97,20 +90,13 @@ struct SplitHandle: View {
             }
             .contentShape(.rect)
             .gesture(
-                // `.global` so translation tracks the finger relative to the
-                // screen — not to the SplitHandle's local frame, which moves
-                // with the divider mid-drag and otherwise halves the reported
-                // distance.
+                // Global coordinates avoid feedback as the divider moves.
                 DragGesture(minimumDistance: 2, coordinateSpace: .global)
                     .onChanged { value in
-                        // Throttle: WebContent can't keep up with 120 Hz drag
-                        // events when WKWebViews need to relayout. Cap at ~60 Hz.
+                        // Throttle WKWebView relayout during drag.
                         let now = CACurrentMediaTime()
                         if now - lastEmitTime < 1.0 / 60.0 { return }
                         lastEmitTime = now
-                        // `onBegin` is idempotent on the receiving side, so
-                        // calling it on every event is safe and removes the
-                        // need for fragile per-handle `@State`.
                         onBegin()
                         let cumulative = axis == .horizontal
                             ? value.translation.height
@@ -118,7 +104,6 @@ struct SplitHandle: View {
                         onTranslate(cumulative)
                     }
                     .onEnded { value in
-                        // Always deliver the final position regardless of throttle.
                         lastEmitTime = 0
                         let cumulative = axis == .horizontal
                             ? value.translation.height

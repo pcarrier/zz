@@ -17,7 +17,6 @@ struct zzApp: App {
         .defaultSize(width: 1280, height: 860)
         #endif
         .commands {
-            // Empty placeholders SwiftUI adds by default.
             CommandGroup(replacing: .toolbar)        { }
             CommandGroup(replacing: .sidebar)        { }
             CommandGroup(replacing: .printItem)      { }
@@ -25,8 +24,6 @@ struct zzApp: App {
             CommandGroup(replacing: .textFormatting) { }
             CommandGroup(replacing: .help)           { }
 
-            // File > New Window — replaces the default Cmd+N entry (we use ⌘N
-            // for "park focused tile" inside a window, so new-window lives on ⇧⌘N).
             CommandGroup(replacing: .newItem) {
                 Button("New Window") {
                     openWindow(value: WindowID())

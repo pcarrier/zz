@@ -5,8 +5,6 @@ import UIKit
 import AppKit
 #endif
 
-/// Selects all text in whatever responder currently has the keyboard.
-/// Called when the URL bar gains focus so a tap immediately selects the URL.
 @MainActor
 private func selectAll() {
     #if canImport(UIKit)
@@ -28,6 +26,8 @@ struct URLBar: View {
     @Binding var text: String
     @FocusState.Binding var focused: Bool
     var placeholder: String = "Search or enter URL"
+    var findEnabled: Bool = true
+    var onFind: () -> Void = {}
     var onSubmit: () -> Void
 
     var body: some View {
@@ -39,6 +39,17 @@ struct URLBar: View {
                 .onChange(of: focused) { _, isFocused in
                     if isFocused { selectAll() }
                 }
+            Button(action: onFind) {
+                Image(systemName: "text.magnifyingglass")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .disabled(!findEnabled)
+            .opacity(findEnabled ? 1 : 0.35)
+            .help("Find on Page (⌘F)")
             if !text.isEmpty && focused {
                 Button {
                     text = ""

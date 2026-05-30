@@ -119,7 +119,7 @@ private struct EmptyTileState: View {
     }
 }
 
-// MARK: - Drop state (class-based so the delegate sees fresh values across renders)
+// MARK: - Drop state
 
 enum DropZone: Equatable { case top, bottom, left, right, center }
 
@@ -160,7 +160,6 @@ final class TileDropState {
     }
 }
 
-/// Outer 15% of each dimension classifies as an edge zone; the inner 70% is center.
 private func dropZone(at location: CGPoint, in size: CGSize) -> DropZone {
     guard size.width > 0, size.height > 0 else { return .center }
     let xFrac = location.x / size.width

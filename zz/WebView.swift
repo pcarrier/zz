@@ -7,8 +7,6 @@ import UIKit
 import AppKit
 #endif
 
-/// Pane-level drops can originate from a browser URL drag or from a parked
-/// sidebar tab.
 enum PaneDropPayload {
     case url(String)
     case parkedTab(UUID)
@@ -20,8 +18,6 @@ struct PaneDropHandler {
     var end: () -> Void
 }
 
-/// Hosts a `WKWebView` that's owned externally (by a `Tab`), allowing the same
-/// instance to move between locations without being torn down.
 struct HostedWebView: View {
     let webView: WKWebView
     var onInteraction: (() -> Void)? = nil
@@ -79,14 +75,12 @@ extension _Representable: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ContainerView, context: Context) -> CGSize? {
-        // No intrinsic opinion — take whatever the parent proposes.
         nil
     }
 }
 
 extension _Representable {
-    /// A passthrough container ensures the `WKWebView` always has the right parent,
-    /// even after being yanked away by another `HostedWebView` and brought back.
+    /// Reparents the externally owned `WKWebView` without tearing it down.
     final class ContainerView: UIView {
         var onInteraction: (() -> Void)?
         var shouldHost: () -> Bool = { true }
@@ -111,10 +105,7 @@ extension _Representable {
             refreshHostedLayout()
         }
 
-        /// Observe touches via hit-testing rather than a gesture recognizer.
-        /// `hitTest(_:with:)` is read-only — UIKit asks us "who should receive
-        /// this touch?", we report the answer, and the touch then flows normally
-        /// into WebKit's gesture system (including sub-iframe scroll routing).
+        /// Detects focus without installing a competing gesture recognizer.
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
             let result = super.hitTest(point, with: event)
             if countsAsClickToFocus(event), let r = result, r !== self {

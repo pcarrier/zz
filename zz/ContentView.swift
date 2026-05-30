@@ -1,7 +1,4 @@
 import SwiftUI
-#if canImport(UIKit) && !os(macOS)
-import UIKit
-#endif
 
 struct ContentView: View {
     let windowID: WindowID
@@ -21,7 +18,6 @@ private struct BrowserScene: View {
     @State private var store: BrowserStore
     @State private var draft: String = ""
     @State private var selectedSuggestionIndex: Int? = nil
-    @State private var neutralizeKeyboardSafeArea: Bool = false
     @State private var urlEditingTabID: UUID?
     @FocusState private var urlFocused: Bool
 
@@ -55,16 +51,14 @@ private struct BrowserScene: View {
                 .frame(maxWidth: 720)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 6)
-                // Consume taps across the full padded area so a tap on a
-                // suggestion's surrounding margin doesn't fall through to the
-                // tile underneath (which would focus that tile and discard
-                // the suggestion).
+                // Keep margin taps from falling through to the focused pane.
                 .contentShape(.rect)
                 .onTapGesture { }
             }
 
             ShortcutLayer(
                 store: store,
+                urlFocused: urlFocused,
                 newWindow:    { openWindow(value: WindowID()) },
                 closeWindow:  { dismissWindow(value: windowID) }
             )
@@ -79,15 +73,9 @@ private struct BrowserScene: View {
             )
             .environment(store)
         }
-        .keyboardSafeAreaNeutralized(neutralizeKeyboardSafeArea)
         .statusBarHiddenIfAvailable()
         .persistentSystemOverlaysHiddenIfAvailable()
         .onChange(of: store.focusedTabID) { _, _ in
-            // Sync the URL field to the new tile's URL, but don't force the
-            // URL bar to unfocus — clicking a webview already resigns first
-            // responder, and explicit unfocus here races with focusURLBar()
-            // requests that change the focused tile and request bar focus
-            // in the same tick (e.g. tapping an empty pane).
             draft = store.focusedTab?.currentURL ?? ""
             if urlFocused { urlEditingTabID = store.focusedTabID }
             selectedSuggestionIndex = nil
@@ -122,18 +110,6 @@ private struct BrowserScene: View {
         .onOpenURL { url in
             store.openExternalURL(url.absoluteString)
         }
-        #if canImport(UIKit) && !os(macOS)
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIResponder.keyboardWillChangeFrameNotification
-        )) { notification in
-            updateKeyboardSafeAreaNeutralization(for: notification)
-        }
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIResponder.keyboardWillHideNotification
-        )) { _ in
-            neutralizeKeyboardSafeArea = false
-        }
-        #endif
     }
 
     @ViewBuilder
@@ -186,26 +162,11 @@ private struct BrowserScene: View {
         return nil
     }
 
-    #if canImport(UIKit) && !os(macOS)
-    private func updateKeyboardSafeAreaNeutralization(for notification: Notification) {
-        guard let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
-            neutralizeKeyboardSafeArea = false
-            return
-        }
-
-        let screenBottom = UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.screen.bounds.maxY }
-            .max() ?? endFrame.maxY
-        let overlap = max(0, screenBottom - endFrame.minY)
-        neutralizeKeyboardSafeArea = overlap > 0 && overlap <= 96
-    }
-    #endif
 }
-
-// MARK: - Shortcut layer (invisible buttons)
 
 private struct ShortcutLayer: View {
     let store: BrowserStore
+    let urlFocused: Bool
     let newWindow:   () -> Void
     let closeWindow: () -> Void
 
@@ -219,15 +180,18 @@ private struct ShortcutLayer: View {
             shortcut("Focus URL Bar",    "l", action: store.focusURLBar)
 
             shortcut("Reload",           "r", action: store.reloadFocused)
+            shortcut("Force Reload",     "r", modifiers: [.command, .shift],
+                     action: store.forceReloadFocused)
             #if !os(macOS)
-            // On macOS, the standard Edit > Find menu item handles ⌘F natively
-            // for WKWebView via the responder chain — don't shadow it here.
             shortcut("Find on Page",     "f", action: store.findInFocused)
             #endif
             shortcut("Back",             "[", action: store.backFocused)
             shortcut("Forward",          "]", action: store.forwardFocused)
+            if !urlFocused {
+                shortcut("Back Arrow",    .leftArrow, action: store.backFocused)
+                shortcut("Forward Arrow", .rightArrow, action: store.forwardFocused)
+            }
 
-            // Toggle zoom on the focused tile.
             Button("Toggle Zoom") { store.toggleZoom() }
                 .keyboardShortcut("f", modifiers: [.command, .control])
                 .opacity(0)
@@ -278,10 +242,6 @@ private struct ShortcutLayer: View {
 }
 
 extension View {
-    func keyboardSafeAreaNeutralized(_ neutralized: Bool) -> some View {
-        ignoresSafeArea(.keyboard, edges: neutralized ? .bottom : [])
-    }
-
     func statusBarHiddenIfAvailable() -> some View {
         #if canImport(UIKit) && !os(macOS)
         return self.statusBarHidden(true)

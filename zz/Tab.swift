@@ -1,11 +1,82 @@
 import SwiftUI
 import WebKit
 import Observation
-import Combine
 import UniformTypeIdentifiers
+import Security
 #if !os(macOS)
 import UIKit
 #endif
+
+private struct HTTPAuthKey: Hashable {
+    let host: String
+    let port: Int
+    let realm: String
+    let method: String
+    let protocolName: String
+
+    init(_ protectionSpace: URLProtectionSpace) {
+        host = protectionSpace.host
+        port = protectionSpace.port
+        realm = protectionSpace.realm ?? ""
+        method = protectionSpace.authenticationMethod
+        protocolName = protectionSpace.protocol ?? ""
+    }
+
+    var account: String {
+        [protocolName, host, String(port), realm, method]
+            .map { Data($0.utf8).base64EncodedString() }
+            .joined(separator: "|")
+    }
+}
+
+private struct StoredHTTPAuthCredential: Codable {
+    var user: String
+    var password: String
+}
+
+private enum HTTPAuthCredentialStore {
+    private static let service = "surf.zz.http-auth"
+
+    static func credential(for key: HTTPAuthKey) -> URLCredential? {
+        var query = baseQuery(for: key)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let stored = try? JSONDecoder().decode(StoredHTTPAuthCredential.self, from: data) else {
+            return nil
+        }
+        return URLCredential(user: stored.user, password: stored.password, persistence: .permanent)
+    }
+
+    static func set(_ credential: URLCredential, for key: HTTPAuthKey) {
+        guard let user = credential.user,
+              let password = credential.password,
+              let data = try? JSONEncoder().encode(StoredHTTPAuthCredential(user: user, password: password)) else {
+            return
+        }
+
+        remove(for: key)
+        var query = baseQuery(for: key)
+        query[kSecValueData as String] = data
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        SecItemAdd(query as CFDictionary, nil)
+    }
+
+    static func remove(for key: HTTPAuthKey) {
+        SecItemDelete(baseQuery(for: key) as CFDictionary)
+    }
+
+    private static func baseQuery(for key: HTTPAuthKey) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key.account,
+        ]
+    }
+}
 
 @MainActor
 @Observable
@@ -26,19 +97,17 @@ final class Tab {
     private var observations: [NSKeyValueObservation] = []
 
     @ObservationIgnored
-    private var resettingInsets = false
-
-    @ObservationIgnored
-    private var cancellables: Set<AnyCancellable> = []
-
-    @ObservationIgnored
     private var pendingScrollRestore: CGPoint?
 
-    /// Continuously mirrored from `webView.scrollView.contentOffset` so we
-    /// have a pre-termination value to restore from when WebContent gets
-    /// killed (the live `contentOffset` resets to .zero on kill).
     @ObservationIgnored
     private var lastScrollOffset: CGPoint = .zero
+
+    @ObservationIgnored
+    private var httpAuthCredentials: [HTTPAuthKey: URLCredential] = [:]
+
+    @ObservationIgnored
+    private var pendingHTTPAuthCompletions:
+        [HTTPAuthKey: [(URLSession.AuthChallengeDisposition, URLCredential?) -> Void]] = [:]
 
     @ObservationIgnored
     private let uiDelegate = SameWindowUIDelegate()
@@ -66,8 +135,7 @@ final class Tab {
         config.allowsInlineMediaPlayback = true
         #endif
 
-        // Initial frame chosen so the first layout pass uses a reasonable viewport
-        // instead of 0×0 (where some sites snap to extreme mobile breakpoints).
+        // Avoid a 0x0 initial viewport before the first layout pass.
         #if os(macOS)
         self.webView = PaneDropRoutingWebView(
             frame: CGRect(x: 0, y: 0, width: 1024, height: 768),
@@ -88,10 +156,7 @@ final class Tab {
         #if !os(macOS)
         self.webView.scrollView.contentInsetAdjustmentBehavior = .never
         self.webView.scrollView.automaticallyAdjustsScrollIndicatorInsets = false
-        // Honor pages that lock scrolling: only allow panning when there is
-        // actually scrollable content. WKWebView defaults `alwaysBounce*` to
-        // true, which lets users drag and rubber-band even on pages with
-        // `overflow: hidden` or content shorter than the viewport.
+        // Match Safari on pages that lock or do not need scrolling.
         self.webView.scrollView.alwaysBounceVertical = false
         self.webView.scrollView.alwaysBounceHorizontal = false
         #endif
@@ -106,6 +171,18 @@ final class Tab {
 
 
     func reload()    { webView.reload() }
+    func forceReload() {
+        if webView.url != nil {
+            webView.reloadFromOrigin()
+        } else if let target = URLNormalizer.resolve(currentURL) {
+            let request = URLRequest(
+                url: target,
+                cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
+                timeoutInterval: 60
+            )
+            webView.load(request)
+        }
+    }
     func goBack()    { webView.goBack() }
     func goForward() { webView.goForward() }
     func stop()      { webView.stopLoading() }
@@ -148,7 +225,7 @@ final class Tab {
             return
         }
         guard let target = URLNormalizer.resolve(trimmed) else { return }
-        pendingScrollRestore = nil  // explicit nav cancels any pending restore
+        pendingScrollRestore = nil
         currentURL = target.absoluteString
         notifyPersistenceChanged()
         webView.load(URLRequest(url: target))
@@ -156,8 +233,6 @@ final class Tab {
 
     var scrollOffset: CGPoint {
         #if !os(macOS)
-        // Return the mirrored value: stays valid even if WebContent was
-        // terminated and `scrollView.contentOffset` was reset to .zero.
         return lastScrollOffset
         #else
         return .zero
@@ -168,7 +243,6 @@ final class Tab {
         guard let pending = pendingScrollRestore else { return }
         pendingScrollRestore = nil
         #if !os(macOS)
-        // Defer to let content lay out / images load before snapping the offset.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             self?.webView.scrollView.setContentOffset(pending, animated: false)
@@ -180,8 +254,6 @@ final class Tab {
         onPersistenceChange?()
     }
 
-    /// Recover from a WebContent process termination: reload the page and
-    /// restore the scroll offset we mirrored before the kill.
     func recoverFromTermination() {
         #if !os(macOS)
         if lastScrollOffset != .zero {
@@ -189,6 +261,133 @@ final class Tab {
         }
         #endif
         webView.reload()
+    }
+
+    func respondToHTTPAuthenticationChallenge(
+        _ challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let protectionSpace = challenge.protectionSpace
+        let key = HTTPAuthKey(protectionSpace)
+
+        let failedPreviousCredential = challenge.previousFailureCount > 0
+        if failedPreviousCredential {
+            clearHTTPAuthCredential(for: key, protectionSpace: protectionSpace)
+        } else if let credential = httpAuthCredentials[key]
+                    ?? URLCredentialStorage.shared.defaultCredential(for: protectionSpace)
+                    ?? HTTPAuthCredentialStore.credential(for: key) {
+            httpAuthCredentials[key] = credential
+            URLCredentialStorage.shared.set(credential, for: protectionSpace)
+            URLCredentialStorage.shared.setDefaultCredential(credential, for: protectionSpace)
+            completionHandler(.useCredential, credential)
+            return
+        } else if let credential = challenge.proposedCredential {
+            httpAuthCredentials[key] = credential
+            completionHandler(.useCredential, credential)
+            return
+        }
+
+        if var pending = pendingHTTPAuthCompletions[key] {
+            pending.append(completionHandler)
+            pendingHTTPAuthCompletions[key] = pending
+            return
+        }
+
+        pendingHTTPAuthCompletions[key] = [completionHandler]
+        #if !os(macOS)
+        let host = protectionSpace.port > 0
+            ? "\(protectionSpace.host):\(protectionSpace.port)"
+            : protectionSpace.host
+        let title = challenge.previousFailureCount > 0 ? "Sign In Failed" : "Sign In Required"
+        let message: String
+        if let realm = protectionSpace.realm, !realm.isEmpty {
+            message = "\(host)\n\(realm)"
+        } else {
+            message = host
+        }
+
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "Username"
+            field.textContentType = .username
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addTextField { field in
+            field.placeholder = "Password"
+            field.textContentType = .password
+            field.isSecureTextEntry = true
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+            self.completeHTTPAuthChallenge(
+                key: key,
+                protectionSpace: protectionSpace,
+                disposition: .cancelAuthenticationChallenge,
+                credential: nil
+            )
+        })
+        alert.addAction(UIAlertAction(title: "Sign In", style: .default) { [weak alert] _ in
+            let username = alert?.textFields?.first?.text ?? ""
+            let password = alert?.textFields?.dropFirst().first?.text ?? ""
+            let credential = URLCredential(
+                user: username,
+                password: password,
+                persistence: .permanent
+            )
+            self.completeHTTPAuthChallenge(
+                key: key,
+                protectionSpace: protectionSpace,
+                disposition: .useCredential,
+                credential: credential
+            )
+        })
+
+        guard let presenter = UIViewController.zzTopMostPresenter() else {
+            completeHTTPAuthChallenge(
+                key: key,
+                protectionSpace: protectionSpace,
+                disposition: .performDefaultHandling,
+                credential: nil
+            )
+            return
+        }
+        presenter.present(alert, animated: true)
+        #else
+        completeHTTPAuthChallenge(
+            key: key,
+            protectionSpace: protectionSpace,
+            disposition: .performDefaultHandling,
+            credential: nil
+        )
+        #endif
+    }
+
+    private func completeHTTPAuthChallenge(
+        key: HTTPAuthKey,
+        protectionSpace: URLProtectionSpace,
+        disposition: URLSession.AuthChallengeDisposition,
+        credential: URLCredential?
+    ) {
+        if disposition == .useCredential, let credential {
+            httpAuthCredentials[key] = credential
+            HTTPAuthCredentialStore.set(credential, for: key)
+            URLCredentialStorage.shared.set(credential, for: protectionSpace)
+            URLCredentialStorage.shared.setDefaultCredential(credential, for: protectionSpace)
+        }
+        let completions = pendingHTTPAuthCompletions.removeValue(forKey: key) ?? []
+        for completion in completions {
+            completion(disposition, credential)
+        }
+    }
+
+    private func clearHTTPAuthCredential(for key: HTTPAuthKey, protectionSpace: URLProtectionSpace) {
+        if let credential = httpAuthCredentials.removeValue(forKey: key) {
+            URLCredentialStorage.shared.remove(credential, for: protectionSpace)
+        }
+        if let credential = URLCredentialStorage.shared.defaultCredential(for: protectionSpace) {
+            URLCredentialStorage.shared.remove(credential, for: protectionSpace)
+        }
+        HTTPAuthCredentialStore.remove(for: key)
     }
 
     private func wire() {
@@ -233,74 +432,16 @@ final class Tab {
             },
         ]
         #if !os(macOS)
-        // WebKit inserts a bottom contentInset equal to the keyboard height
-        // when an input is focused — including when a HW keyboard is attached
-        // and no software keyboard actually appears. Two layers of defense:
-        //  • KVO on contentInset / scroll-indicator insets, snapping back to
-        //    zero whenever we see them grow.
-        //  • Notification-driven reset on keyboard-frame events, dispatched
-        //    asynchronously so it runs after WebKit's own handlers.
-        observations.append(
-            webView.scrollView.observe(\.contentInset, options: [.new]) { [weak self] sv, _ in
-                // UIScrollView KVO fires on the main thread.
-                MainActor.assumeIsolated {
-                    guard let self, !self.resettingInsets else { return }
-                    if sv.contentInset != .zero {
-                        self.resettingInsets = true
-                        sv.contentInset = .zero
-                        self.resettingInsets = false
-                    }
-                }
-            }
-        )
         observations.append(
             webView.scrollView.observe(\.contentOffset, options: [.new]) { [weak self] sv, _ in
                 let offset = sv.contentOffset
                 MainActor.assumeIsolated {
-                    // Skip zero updates: a WebContent termination wipes the
-                    // offset to .zero and would otherwise clobber the
-                    // pre-termination value we need for recovery.
+                    // Keep the pre-termination offset when WebContent resets to zero.
                     guard offset != .zero else { return }
                     self?.lastScrollOffset = offset
                 }
             }
         )
-        observations.append(
-            webView.scrollView.observe(\.verticalScrollIndicatorInsets, options: [.new]) { [weak self] sv, _ in
-                MainActor.assumeIsolated {
-                    guard let self, !self.resettingInsets else { return }
-                    if sv.verticalScrollIndicatorInsets != .zero {
-                        self.resettingInsets = true
-                        sv.verticalScrollIndicatorInsets = .zero
-                        self.resettingInsets = false
-                    }
-                }
-            }
-        )
-
-        let keyboardNotifications: [Notification.Name] = [
-            UIResponder.keyboardWillShowNotification,
-            UIResponder.keyboardDidShowNotification,
-            UIResponder.keyboardWillChangeFrameNotification,
-            UIResponder.keyboardDidChangeFrameNotification,
-        ]
-        for name in keyboardNotifications {
-            NotificationCenter.default.publisher(for: name)
-                .sink { [weak self] _ in
-                    guard let self else { return }
-                    DispatchQueue.main.async {
-                        let sv = self.webView.scrollView
-                        if sv.contentInset != .zero { sv.contentInset = .zero }
-                        if sv.verticalScrollIndicatorInsets != .zero {
-                            sv.verticalScrollIndicatorInsets = .zero
-                        }
-                        if sv.horizontalScrollIndicatorInsets != .zero {
-                            sv.horizontalScrollIndicatorInsets = .zero
-                        }
-                    }
-                }
-                .store(in: &cancellables)
-        }
         #endif
     }
 }
@@ -423,22 +564,7 @@ final class PaneDropRoutingWebView: WKWebView {
 #endif
 
 #if !os(macOS)
-private var inputAssistantAssociationKey: UInt8 = 0
-
-/// WebKit customizations we can't get via public API:
-///   • Refuse to host a `UIDropInteraction` on the WKWebView so SwiftUI's
-///     tile-level `.onDrop` is what receives URL drops.
-///   • Strip any drop interactions WebKit installs on the internal
-///     `WKContentView` (a private subview of `scrollView`) and the scroll
-///     view itself. Done on each `didMoveToWindow` and on every layout pass —
-///     polling is cheap and avoids ObjC-runtime method swaps that can crash
-///     when WebKit's own dispatch expects a particular IMP shape.
-///   • Override `inputAccessoryView` on `WKContentView` (via a safe one-time
-///     subclass swap) and blank `inputAssistantItem`, so focused web form
-///     fields don't show the hardware-keyboard shortcut / mic bar.
-///   • Remove WebKit's image-analysis deferral recognizer. It can get stuck
-///     reporting an ended deferral on iPadOS when attached to the patched
-///     content view, and it is not needed for browser pane interactions.
+/// WebKit hooks for pane drops and stuck image-analysis deferrers.
 private final class NoDropWebView: WKWebView {
     override var pasteConfiguration: UIPasteConfiguration? {
         get { nil }
@@ -449,9 +575,7 @@ private final class NoDropWebView: WKWebView {
         false
     }
 
-    override func paste(itemProviders: [NSItemProvider]) {
-        // URL drops are handled by the surrounding tile-level SwiftUI drop target.
-    }
+    override func paste(itemProviders: [NSItemProvider]) { }
 
     override func addInteraction(_ interaction: any UIInteraction) {
         if interaction is UIDropInteraction { return }
@@ -465,15 +589,13 @@ private final class NoDropWebView: WKWebView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // WebKit may install a drop interaction lazily; remove it if it
-        // reappears after we've initially cleaned up.
         sanitizeWebKitSubviews()
     }
 
     private func sanitizeWebKitSubviews() {
         stripDropInteractions()
         removeImageAnalysisDeferrers()
-        Self.silenceInputAccessory(of: self)
+        Self.installPasteGuard(on: self)
     }
 
     private func stripDropInteractions() {
@@ -520,52 +642,24 @@ private final class NoDropWebView: WKWebView {
             .localizedCaseInsensitiveContains("Deferrer for image analysis")
     }
 
-    private static func silenceInputAccessory(of webView: WKWebView) {
+    private static func installPasteGuard(on webView: WKWebView) {
         guard let target = webView.scrollView.subviews.first(where: { sub in
             NSStringFromClass(type(of: sub)).contains("WKContent")
         }) else { return }
 
-        // Already swapped on a prior window-move — nothing to do.
-        if NSStringFromClass(type(of: target)).hasPrefix("_ZZ_NoInputAccessory_") {
-            suppressKeyboardChrome(on: target)
+        if NSStringFromClass(type(of: target)).hasPrefix("_ZZ_NoDropPaste_") {
+            target.pasteConfiguration = nil
             return
         }
 
         let originalClass: AnyClass = type(of: target)
-        let newClassName = "_ZZ_NoInputAccessory_" + NSStringFromClass(originalClass)
+        let newClassName = "_ZZ_NoDropPaste_" + NSStringFromClass(originalClass)
         if let existing = NSClassFromString(newClassName) {
             object_setClass(target, existing)
-            suppressKeyboardChrome(on: target)
+            target.pasteConfiguration = nil
             return
         }
         guard let newClass = objc_allocateClassPair(originalClass, newClassName, 0) else { return }
-        let accessorySelector = #selector(getter: UIResponder.inputAccessoryView)
-        let accessoryBlock: @convention(block) (AnyObject) -> UIView? = { _ in nil }
-        class_addMethod(newClass, accessorySelector,
-                        imp_implementationWithBlock(accessoryBlock), "@@:")
-
-        let assistantSelector = #selector(getter: UIResponder.inputAssistantItem)
-        let assistantBlock: @convention(block) (AnyObject) -> UITextInputAssistantItem = { target in
-            if let existing = objc_getAssociatedObject(
-                target, &inputAssistantAssociationKey
-            ) as? UITextInputAssistantItem {
-                return existing
-            }
-
-            let item = UITextInputAssistantItem()
-            item.leadingBarButtonGroups = []
-            item.trailingBarButtonGroups = []
-            item.allowsHidingShortcuts = true
-            objc_setAssociatedObject(
-                target,
-                &inputAssistantAssociationKey,
-                item,
-                .OBJC_ASSOCIATION_RETAIN_NONATOMIC
-            )
-            return item
-        }
-        class_addMethod(newClass, assistantSelector,
-                        imp_implementationWithBlock(assistantBlock), "@@:")
 
         let pasteSelector = NSSelectorFromString("pasteItemProviders:")
         let pasteBlock: @convention(block) (Any, [NSItemProvider]) -> Void = { _, _ in }
@@ -579,27 +673,54 @@ private final class NoDropWebView: WKWebView {
 
         objc_registerClassPair(newClass)
         object_setClass(target, newClass)
-        suppressKeyboardChrome(on: target)
-    }
-
-    private static func suppressKeyboardChrome(on target: UIView) {
         target.pasteConfiguration = nil
-        target.inputAssistantItem.leadingBarButtonGroups = []
-        target.inputAssistantItem.trailingBarButtonGroups = []
-        target.inputAssistantItem.allowsHidingShortcuts = true
-        if target.isFirstResponder {
-            target.reloadInputViews()
-        }
     }
 }
 #endif
 
-/// Forwards `didFinish` navigation events back to the owning `Tab` so it can
-/// run post-load logic (e.g. restoring a saved scroll offset). Also reloads
-/// the page when WebKit kills the WebContent process — without recovery, the
-/// `WKWebView` keeps its frame but shows blank ("the panes go black").
+#if !os(macOS)
+private extension UIViewController {
+    static func zzTopMostPresenter() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+
+        let activeWindow = scenes
+            .filter { $0.activationState == .foregroundActive }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }
+
+        let fallbackWindow = scenes
+            .flatMap(\.windows)
+            .first { !$0.isHidden }
+
+        return (activeWindow ?? fallbackWindow)?.rootViewController?.zzTopMostPresented()
+    }
+
+    func zzTopMostPresented() -> UIViewController {
+        if let presentedViewController {
+            return presentedViewController.zzTopMostPresented()
+        }
+        if let navigation = self as? UINavigationController,
+           let visible = navigation.visibleViewController {
+            return visible.zzTopMostPresented()
+        }
+        if let tabBar = self as? UITabBarController,
+           let selected = tabBar.selectedViewController {
+            return selected.zzTopMostPresented()
+        }
+        return self
+    }
+}
+#endif
+
 private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
     weak var owner: Tab?
+    private let httpAuthenticationMethods: Set<String> = [
+        NSURLAuthenticationMethodHTTPBasic,
+        NSURLAuthenticationMethodHTTPDigest,
+        NSURLAuthenticationMethodNTLM,
+        NSURLAuthenticationMethodNegotiate,
+    ]
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor [weak owner] in
@@ -607,20 +728,37 @@ private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
         }
     }
 
+    func webView(
+        _ webView: WKWebView,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let protectionSpace = challenge.protectionSpace
+        guard httpAuthenticationMethods.contains(protectionSpace.authenticationMethod) else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        Task { @MainActor [weak owner] in
+            guard let owner else {
+                completionHandler(.performDefaultHandling, nil)
+                return
+            }
+            owner.respondToHTTPAuthenticationChallenge(
+                challenge,
+                completionHandler: completionHandler
+            )
+        }
+    }
+
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        // iOS terminates WebContent under memory pressure, especially with
-        // multiple webviews loaded. Reload to bring the page back, and
-        // restore the pre-termination scroll position via the cached
-        // `lastScrollOffset` so the user lands where they left off.
         Task { @MainActor [weak owner] in
             owner?.recoverFromTermination()
         }
     }
 }
 
-/// `target="_blank"` and `window.open()` create a new web view by default.
-/// We don't have a notion of separate web views per tab, so load the request
-/// inside the originating tab instead.
+/// Routes new-window requests back into the current tab.
 private final class SameWindowUIDelegate: NSObject, WKUIDelegate {
     func webView(_ webView: WKWebView,
                  createWebViewWith configuration: WKWebViewConfiguration,

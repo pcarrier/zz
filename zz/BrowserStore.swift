@@ -289,7 +289,6 @@ final class BrowserStore {
             self.tabs = loadedTabs
             self.root = snap.root
             self.sidebarWidth = snap.sidebarWidth
-            // Ensure every visible leaf has a tab record; if not, create a blank one.
             for tabID in root.tabIDs() where tabs[tabID] == nil {
                 tabs[tabID] = Tab(id: tabID, history: history)
             }
@@ -301,7 +300,6 @@ final class BrowserStore {
             } else {
                 self.focusedTabID = root.tabIDs().first { tabs[$0] != nil }
             }
-            // Drop tabs that aren't referenced anywhere.
             let referenced = Set(root.tabIDs() + parked)
             for key in Array(tabs.keys) where !referenced.contains(key) {
                 tabs[key] = nil
@@ -481,7 +479,6 @@ final class BrowserStore {
                 focusedTabID = focusAfterClose ?? newRoot.tabIDs().first
             }
         } else {
-            // Only-tab close: replace with a fresh blank.
             tabs[tabID] = nil
             let newID = makeBlankTab()
             root = .leaf(tabID: newID)
@@ -496,21 +493,15 @@ final class BrowserStore {
         scheduleSave()
     }
 
-    /// Drag-session state for split handles: capture the ratio once at drag start so
-    /// per-event ratio computations are stable across SwiftUI rebuilds.
     @ObservationIgnored
     private var dragInitialRatios: [UUID: Double] = [:]
 
     func beginRatioDrag(_ splitID: UUID) {
-        // Idempotent: only capture the starting ratio the first time per drag.
         if dragInitialRatios[splitID] == nil {
             dragInitialRatios[splitID] = root.ratio(forSplit: splitID)
         }
     }
 
-    /// Apply a ratio update during an in-progress drag. Computes the new ratio
-    /// from the drag-start size plus the gesture's cumulative translation,
-    /// without rescheduling persistence on every frame.
     func updateRatioDrag(_ splitID: UUID, usable: CGFloat, translation: CGFloat) {
         guard let initial = dragInitialRatios[splitID], usable > 0 else { return }
         let newSize = usable * initial + translation
@@ -544,9 +535,6 @@ final class BrowserStore {
         }
     }
 
-    /// Update sidebar width from a cumulative drag translation. Positive
-    /// translation means dragging right; since the sidebar is on the right
-    /// edge, dragging right shrinks it.
     func updateSidebarDrag(translation: CGFloat) {
         guard let initial = dragInitialSidebarWidth else { return }
         sidebarWidth = (initial - Double(translation)).clamped(to: 0...520)
@@ -557,14 +545,13 @@ final class BrowserStore {
         scheduleSave()
     }
 
-    func reloadFocused()   { focusedTab?.reload() }
-    func backFocused()     { focusedTab?.goBack() }
-    func forwardFocused()  { focusedTab?.goForward() }
-    func findInFocused()   { focusedTab?.find() }
-    func focusURLBar()     { focusURLBarTrigger &+= 1 }
+    func reloadFocused()      { focusedTab?.reload() }
+    func forceReloadFocused() { focusedTab?.forceReload() }
+    func backFocused()        { focusedTab?.goBack() }
+    func forwardFocused()     { focusedTab?.goForward() }
+    func findInFocused()      { focusedTab?.find() }
+    func focusURLBar()        { focusURLBarTrigger &+= 1 }
 
-    /// Toggle "zoom" — temporarily show only the focused tile, hiding the rest
-    /// of the BSP tree. Called again, restores the full layout.
     func toggleZoom() {
         if zoomedTabID != nil {
             zoomedTabID = nil
@@ -574,8 +561,6 @@ final class BrowserStore {
         scheduleSave()
     }
 
-    /// Handle a URL handed in from outside the app. Loads it in the focused
-    /// tab if blank; otherwise splits a new pane to its right.
     func openExternalURL(_ urlString: String) {
         guard let tab = focusedTab else { return }
         if tab.isBlank {
@@ -592,7 +577,6 @@ final class BrowserStore {
         park(id)
     }
 
-    /// Move a tab into the parked list and replace its leaf with a fresh blank tab.
     func park(_ tabID: UUID) {
         guard let tab = tabs[tabID], !tab.isBlank, root.contains(tabID) else { return }
         let newID = makeBlankTab()
@@ -603,8 +587,6 @@ final class BrowserStore {
         scheduleSave()
     }
 
-    /// Tap a sidebar preview: swap the parked tab into the focused leaf,
-    /// and send the previously focused tab to its old sidebar slot.
     func swapParkedWithFocused(_ parkedTabID: UUID) {
         guard let focusedID = focusedTabID else { return }
         dropParked(parkedTabID, on: focusedID, zone: .center)
@@ -660,8 +642,6 @@ final class BrowserStore {
         }
     }
 
-    /// Force-write the current state synchronously. Call when scene phase
-    /// transitions to background so a pending debounced save isn't lost.
     func flushSave() {
         saveTask?.cancel()
         Self.write(currentSnapshot(), to: Self.snapshotFile(for: windowID))
@@ -747,7 +727,6 @@ final class HistoryStore {
         }
     }
 
-    /// Force-write history synchronously (for scene background transitions).
     func flushSave() {
         saveTask?.cancel()
         Self.write(entries)
