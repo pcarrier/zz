@@ -121,14 +121,22 @@ final class Tab {
     @ObservationIgnored
     var onPersistenceChange: (@MainActor () -> Void)?
 
+    @ObservationIgnored
+    var onNewWindowRequest: (@MainActor (WKWebViewConfiguration, WKNavigationAction) -> WKWebView?)?
+
+    @ObservationIgnored
+    var onCloseWindowRequest: (@MainActor () -> Void)?
+
     init(id: UUID = UUID(), url: String = "", title: String? = nil,
-         scrollOffset: CGPoint = .zero, history: HistoryStore?) {
+         scrollOffset: CGPoint = .zero,
+         configuration providedConfiguration: WKWebViewConfiguration? = nil,
+         history: HistoryStore?) {
         self.id = id
         self.currentURL = url
         self.title = title
         self.history = history
 
-        let config = WKWebViewConfiguration()
+        let config = providedConfiguration ?? WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         config.preferences.isElementFullscreenEnabled = true
         #if !os(macOS)
@@ -162,6 +170,7 @@ final class Tab {
         #endif
 
         navDelegate.owner = self
+        uiDelegate.owner = self
         wire()
         if !url.isEmpty, let target = URLNormalizer.resolve(url) {
             if scrollOffset != .zero { pendingScrollRestore = scrollOffset }
@@ -217,6 +226,23 @@ final class Tab {
 
     var backList:    [WKBackForwardListItem] { webView.backForwardList.backList }
     var forwardList: [WKBackForwardListItem] { webView.backForwardList.forwardList }
+
+    func handleNewWindowRequest(
+        configuration: WKWebViewConfiguration,
+        navigationAction: WKNavigationAction
+    ) -> WKWebView? {
+        if let webView = onNewWindowRequest?(configuration, navigationAction) {
+            return webView
+        }
+        if let url = navigationAction.request.url {
+            webView.load(URLRequest(url: url))
+        }
+        return nil
+    }
+
+    func handleCloseWindowRequest() {
+        onCloseWindowRequest?()
+    }
 
     func load(_ urlString: String) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -758,16 +784,22 @@ private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
     }
 }
 
-/// Routes new-window requests back into the current tab.
+/// Routes new-window requests into app-owned panes instead of letting WebKit spawn windows.
 private final class SameWindowUIDelegate: NSObject, WKUIDelegate {
+    weak var owner: Tab?
+
     func webView(_ webView: WKWebView,
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = navigationAction.request.url {
-            webView.load(URLRequest(url: url))
-        }
-        return nil
+        owner?.handleNewWindowRequest(
+            configuration: configuration,
+            navigationAction: navigationAction
+        )
+    }
+
+    func webViewDidClose(_ webView: WKWebView) {
+        owner?.handleCloseWindowRequest()
     }
 }
 

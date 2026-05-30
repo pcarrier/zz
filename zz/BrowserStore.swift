@@ -3,6 +3,7 @@ import CoreGraphics
 import Observation
 import OSLog
 import SwiftUI
+import WebKit
 
 private let persistenceLogger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "surf.zz",
@@ -312,18 +313,28 @@ final class BrowserStore {
             self.focusedTabID = tab.id
             self.sidebarWidth = 220
         }
-        installPersistenceCallbacks()
+        installTabCallbacks()
     }
 
-    private func installPersistenceCallbacks() {
+    private func installTabCallbacks() {
         for tab in tabs.values {
-            attachPersistenceCallback(to: tab)
+            attachCallbacks(to: tab)
         }
     }
 
-    private func attachPersistenceCallback(to tab: Tab) {
+    private func attachCallbacks(to tab: Tab) {
         tab.onPersistenceChange = { [weak self] in
             self?.scheduleSave()
+        }
+        tab.onNewWindowRequest = { [weak self] configuration, navigationAction in
+            self?.openNewWindowInSidebar(
+                configuration: configuration,
+                navigationAction: navigationAction
+            )
+        }
+        tab.onCloseWindowRequest = { [weak self, weak tab] in
+            guard let tab else { return }
+            self?.closeOrDiscard(tab.id)
         }
     }
 
@@ -364,9 +375,9 @@ final class BrowserStore {
     // MARK: Tabs
 
     @discardableResult
-    private func makeBlankTab() -> UUID {
-        let tab = Tab(history: history)
-        attachPersistenceCallback(to: tab)
+    private func makeBlankTab(configuration: WKWebViewConfiguration? = nil) -> UUID {
+        let tab = Tab(configuration: configuration, history: history)
+        attachCallbacks(to: tab)
         tabs[tab.id] = tab
         return tab.id
     }
@@ -570,6 +581,17 @@ final class BrowserStore {
         }
     }
 
+    func openNewWindowInSidebar(
+        configuration: WKWebViewConfiguration,
+        navigationAction: WKNavigationAction
+    ) -> WKWebView? {
+        let newID = makeBlankTab(configuration: configuration)
+        parked.insert(newID, at: 0)
+        if zoomedTabID != nil { zoomedTabID = nil }
+        scheduleSave()
+        return tabs[newID]?.webView
+    }
+
     // MARK: Parking
 
     func parkFocused() {
@@ -596,6 +618,14 @@ final class BrowserStore {
         parked.removeAll { $0 == parkedTabID }
         tabs[parkedTabID] = nil
         scheduleSave()
+    }
+
+    private func closeOrDiscard(_ tabID: UUID) {
+        if parked.contains(tabID) {
+            discardParked(tabID)
+        } else if root.contains(tabID) {
+            close(tabID)
+        }
     }
 
     func reorderParked(from source: IndexSet, to destination: Int) {
