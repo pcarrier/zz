@@ -18,42 +18,12 @@ struct SidebarView: View {
             LazyVStack(spacing: 10) {
                 ForEach(Array(store.parked.enumerated()), id: \.element) { idx, tabID in
                     if let tab = store.tab(tabID) {
-                        SidebarTilePreview(tab: tab,
-                                           sidebarWidth: store.sidebarWidth,
-                                           shouldHostLiveView: {
-                                               store.isSidebarPreviewHost(tabID)
-                                           })
-                            .onTapGesture {
-                                store.swapParkedWithFocused(tabID)
-                            }
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    store.discardParked(tabID)
-                                } label: {
-                                    Label("Close", systemImage: "xmark")
-                                }
-                            }
-                            .draggable(TabRef(id: tabID)) {
-                                SidebarTilePreview(tab: tab,
-                                                   sidebarWidth: store.sidebarWidth,
-                                                   isLive: false)
-                                    .frame(width: store.sidebarWidth - 16)
-                                    .opacity(0.85)
-                            }
-                            .background(SidebarRowFrameReader(tabID: tabID))
-                            .overlay(alignment: .top) {
-                                if reorderInsertionIndex == idx {
-                                    SidebarInsertionIndicator()
-                                        .offset(y: -5)
-                                }
-                            }
-                            .overlay(alignment: .bottom) {
-                                if reorderInsertionIndex == store.parked.count,
-                                   idx == store.parked.count - 1 {
-                                    SidebarInsertionIndicator()
-                                        .offset(y: 5)
-                                }
-                            }
+                        SidebarParkedRow(
+                            tab: tab,
+                            tabID: tabID,
+                            index: idx,
+                            reorderInsertionIndex: reorderInsertionIndex
+                        )
                     }
                 }
             }
@@ -72,6 +42,108 @@ struct SidebarView: View {
                     ))
         }
         .scrollIndicators(.never)
+    }
+}
+
+private struct SidebarParkedRow: View {
+    @Environment(BrowserStore.self) private var store
+
+    let tab: Tab
+    let tabID: UUID
+    let index: Int
+    let reorderInsertionIndex: Int?
+
+    @State private var swipeOffset: CGFloat = 0
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            dismissBackground
+            rowContent
+                .offset(x: swipeOffset)
+        }
+        .clipped()
+        .contentShape(.rect)
+        .simultaneousGesture(swipeToDismissGesture)
+        .background(SidebarRowFrameReader(tabID: tabID))
+        .overlay(alignment: .top) {
+            if reorderInsertionIndex == index {
+                SidebarInsertionIndicator()
+                    .offset(y: -5)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if reorderInsertionIndex == store.parked.count,
+               index == store.parked.count - 1 {
+                SidebarInsertionIndicator()
+                    .offset(y: 5)
+            }
+        }
+    }
+
+    private var rowContent: some View {
+        SidebarTilePreview(tab: tab,
+                           sidebarWidth: store.sidebarWidth,
+                           shouldHostLiveView: {
+                               store.isSidebarPreviewHost(tabID)
+                           })
+            .onTapGesture {
+                store.swapParkedWithFocused(tabID)
+            }
+            .contextMenu {
+                Button(role: .destructive) {
+                    store.discardParked(tabID)
+                } label: {
+                    Label("Close", systemImage: "xmark")
+                }
+            }
+            .draggable(TabRef(id: tabID)) {
+                SidebarTilePreview(tab: tab,
+                                   sidebarWidth: store.sidebarWidth,
+                                   isLive: false)
+                    .frame(width: store.sidebarWidth - 16)
+                    .opacity(0.85)
+            }
+    }
+
+    private var dismissBackground: some View {
+        let progress = min(1, Double(swipeOffset / max(1, CGFloat(store.sidebarWidth))))
+
+        return HStack {
+            Image(systemName: "trash")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.red.opacity(0.25 + progress * 0.65))
+        .opacity(swipeOffset > 0 ? 1 : 0)
+    }
+
+    private var swipeToDismissGesture: some Gesture {
+        DragGesture(minimumDistance: 14, coordinateSpace: .local)
+            .onChanged { value in
+                guard isRightSwipe(value) else { return }
+                swipeOffset = min(value.translation.width, CGFloat(store.sidebarWidth))
+            }
+            .onEnded { value in
+                guard isRightSwipe(value) else {
+                    swipeOffset = 0
+                    return
+                }
+                let threshold = max(72, CGFloat(store.sidebarWidth) * 0.42)
+                if value.translation.width > threshold ||
+                    value.predictedEndTranslation.width > threshold * 1.2 {
+                    store.discardParked(tabID)
+                } else {
+                    swipeOffset = 0
+                }
+            }
+    }
+
+    private func isRightSwipe(_ value: DragGesture.Value) -> Bool {
+        value.translation.width > 0 &&
+            value.translation.width > abs(value.translation.height) * 1.25
     }
 }
 
