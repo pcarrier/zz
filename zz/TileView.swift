@@ -22,7 +22,7 @@ struct TileView: View {
 
     @ViewBuilder
     private func tile(for tab: Tab) -> some View {
-        let active = store.focusedTabID == tabID
+        let active = store.focusedTabID == tabID && store.selectedGroupID == nil
         Group {
             if tab.isBlank {
                 EmptyTileState { store.focus(tabID); store.focusURLBar() }
@@ -67,11 +67,12 @@ struct TileView: View {
                     .allowsHitTesting(false)
             }
         }
-        .overlay(
-            ActivePaneOutline()
-                .opacity(active ? 1 : 0)
-                .allowsHitTesting(false)
-        )
+        .overlay {
+            if active {
+                ActivePaneOutline()
+                    .allowsHitTesting(false)
+            }
+        }
         .contentShape(.rect)
         .onTapGesture { store.focus(tabID) }
         .background(
@@ -101,8 +102,8 @@ struct TileView: View {
 private struct ActivePaneOutline: View {
     var body: some View {
         Rectangle()
-            .stroke(Color.accentColor.opacity(0.72), lineWidth: 1)
-            .padding(-1)
+            .stroke(Color.textSelection,
+                    lineWidth: PaneSelectionVisual.strokeWidth)
     }
 }
 

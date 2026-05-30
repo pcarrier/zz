@@ -19,11 +19,14 @@ private struct BrowserScene: View {
     @State private var draft: String = ""
     @State private var selectedSuggestionIndex: Int? = nil
     @State private var urlEditingTabID: UUID?
+    @State private var sidebarPresented: Bool = false
+    @State private var settingsPresented: Bool = false
     @FocusState private var urlFocused: Bool
 
     @Environment(HistoryStore.self) private var history
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
 
     init(windowID: WindowID, history: HistoryStore) {
@@ -35,7 +38,7 @@ private struct BrowserScene: View {
         guard urlFocused else { return [] }
         // Fetch up to 100; the suggestion list caps the visible rows and
         // makes the rest scrollable.
-        return history.suggestions(matching: draft, limit: 100)
+        return history.omniboxSuggestions(matching: draft, limit: 100)
     }
 
     var body: some View {
@@ -64,19 +67,38 @@ private struct BrowserScene: View {
                 newWindow:    { openWindow(value: WindowID()) },
                 closeWindow:  { dismissWindow(value: windowID) }
             )
+
+            #if os(macOS)
+            HistoryMouseButtonLayer(
+                onBack: {
+                    guard store.focusedTab?.canGoBack == true else { return false }
+                    store.backFocused()
+                    return true
+                },
+                onForward: {
+                    guard store.focusedTab?.canGoForward == true else { return false }
+                    store.forwardFocused()
+                    return true
+                }
+            )
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            #endif
         }
+        .ignoresTopSafeAreaIfAvailable()
         .safeAreaInset(edge: .bottom, spacing: 0) {
             BottomBar(
                 draft: $draft,
                 urlFocused: $urlFocused,
                 selectedSuggestionIndex: $selectedSuggestionIndex,
                 matches: matches,
+                sidebarPresented: $sidebarPresented,
+                settingsPresented: $settingsPresented,
                 onCommit: commit
             )
             .environment(store)
         }
         .statusBarHiddenIfAvailable()
-        .persistentSystemOverlaysHiddenIfAvailable()
         .onChange(of: store.focusedTabID) { _, _ in
             draft = store.focusedTab?.currentURL ?? ""
             if urlFocused { urlEditingTabID = store.focusedTabID }
@@ -102,6 +124,19 @@ private struct BrowserScene: View {
                 selectedSuggestionIndex = nil
             }
         }
+        .onChange(of: store.parked.count) { oldCount, newCount in
+            if usesCompactLayout && newCount > oldCount {
+                sidebarPresented = true
+            }
+        }
+        .sheet(isPresented: $sidebarPresented) {
+            SidebarView { _ in sidebarPresented = false }
+                .environment(store)
+        }
+        .sheet(isPresented: $settingsPresented) {
+            SettingsView()
+                .environment(history)
+        }
         .task { draft = store.focusedTab?.currentURL ?? "" }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
@@ -116,27 +151,43 @@ private struct BrowserScene: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        HStack(spacing: 0) {
-            Group {
-                if let zoomedID = store.zoomedTabID, store.tab(zoomedID) != nil {
-                    TileView(tabID: zoomedID).id(zoomedID)
-                } else {
-                    BSPView(node: store.root)
+        if usesCompactLayout {
+            mainPaneContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            HStack(spacing: 0) {
+                mainPaneContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if !store.parked.isEmpty && store.zoomedTabID == nil {
+                    SplitHandle(
+                        axis: .vertical,
+                        onBegin:     { store.beginSidebarDrag() },
+                        onTranslate: { t in store.updateSidebarDrag(translation: t) },
+                        onEnd:       { store.endSidebarDrag() }
+                    )
+                    SidebarView()
+                        .frame(width: store.sidebarWidth)
+                        .clipped()
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if !store.parked.isEmpty && store.zoomedTabID == nil {
-                SplitHandle(
-                    axis: .vertical,
-                    onBegin:     { store.beginSidebarDrag() },
-                    onTranslate: { t in store.updateSidebarDrag(translation: t) },
-                    onEnd:       { store.endSidebarDrag() }
-                )
-                SidebarView()
-                    .frame(width: store.sidebarWidth)
-                    .clipped()
-            }
         }
+    }
+
+    @ViewBuilder
+    private var mainPaneContent: some View {
+        if let zoomedID = store.zoomedTabID, store.tab(zoomedID) != nil {
+            TileView(tabID: zoomedID).id(zoomedID)
+        } else {
+            BSPView(node: store.root)
+        }
+    }
+
+    private var usesCompactLayout: Bool {
+        #if os(macOS)
+        return false
+        #else
+        return horizontalSizeClass == .compact
+        #endif
     }
 
     private func commit(_ value: String) {
@@ -174,10 +225,10 @@ private struct ShortcutLayer: View {
 
     var body: some View {
         ZStack {
-            shortcut("New Window",       "n", modifiers: [.command, .shift], action: newWindow)
+            shortcut("New Window",       "n", action: newWindow)
             shortcut("Close Window",     "w", modifiers: [.command, .shift], action: closeWindow)
 
-            shortcut("Park Tile",        "n", action: store.parkFocused)
+            shortcut("Park Tile",        "p", modifiers: [.command, .option], action: store.parkFocused)
             shortcut("Close Tile",       "w", action: closeFocused)
             shortcut("Focus URL Bar",    "l", action: store.focusURLBar)
 
@@ -195,16 +246,22 @@ private struct ShortcutLayer: View {
             }
 
             Button("Toggle Zoom") { store.toggleZoom() }
-                .keyboardShortcut("f", modifiers: [.command, .control])
+                .keyboardShortcut("f", modifiers: [.command, .option, .control])
                 .opacity(0)
                 .frame(width: 0, height: 0)
 
-            shortcut("Split Horizontal", "d") {
-                splitFocused(.horizontal)
+            shortcut("Split Horizontal", "\\") {
+                splitSelection(.horizontal)
             }
-            shortcut("Split Vertical",   "d", modifiers: [.command, .shift]) {
-                splitFocused(.vertical)
+            shortcut("Split Vertical",   "\\", modifiers: [.command, .shift]) {
+                splitSelection(.vertical)
             }
+            shortcut("Select Parent Group", "p", modifiers: [.command, .option, .control],
+                     action: store.selectParentGroup)
+            shortcut("Equalize Group", "=", modifiers: [.command, .option, .control],
+                     action: store.equalizeSelectedGroup)
+            shortcut("Rotate Group", "r", modifiers: [.command, .option, .control],
+                     action: store.rotateSelectedGroup)
 
             arrow("Focus Up",    .upArrow,    .up)
             arrow("Focus Down",  .downArrow,  .down)
@@ -232,9 +289,8 @@ private struct ShortcutLayer: View {
             .frame(width: 0, height: 0)
     }
 
-    private func splitFocused(_ axis: BSPNode.Axis) {
-        guard let id = store.focusedTabID else { return }
-        store.split(id, axis: axis)
+    private func splitSelection(_ axis: BSPNode.Axis) {
+        store.splitSelection(axis: axis)
     }
 
     private func closeFocused() {
@@ -242,6 +298,80 @@ private struct ShortcutLayer: View {
         store.close(id)
     }
 }
+
+#if os(macOS)
+private struct HistoryMouseButtonLayer: NSViewRepresentable {
+    var onBack: () -> Bool
+    var onForward: () -> Bool
+
+    func makeNSView(context: Context) -> HistoryMouseButtonView {
+        let view = HistoryMouseButtonView()
+        view.onBack = onBack
+        view.onForward = onForward
+        return view
+    }
+
+    func updateNSView(_ view: HistoryMouseButtonView, context: Context) {
+        view.onBack = onBack
+        view.onForward = onForward
+    }
+}
+
+private final class HistoryMouseButtonView: NSView {
+    var onBack: (() -> Bool)?
+    var onForward: (() -> Bool)?
+
+    private var monitor: Any?
+    private var handledButtons = Set<Int>()
+
+    deinit {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installMonitorIfNeeded()
+    }
+
+    private func installMonitorIfNeeded() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.otherMouseDown, .otherMouseUp]
+        ) { [weak self] event in
+            self?.handle(event) ?? event
+        }
+    }
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        guard event.window === window else { return event }
+
+        switch event.type {
+        case .otherMouseDown:
+            guard performHistoryAction(for: event.buttonNumber) else { return event }
+            handledButtons.insert(event.buttonNumber)
+            return nil
+        case .otherMouseUp:
+            guard handledButtons.remove(event.buttonNumber) != nil else { return event }
+            return nil
+        default:
+            return event
+        }
+    }
+
+    private func performHistoryAction(for buttonNumber: Int) -> Bool {
+        switch buttonNumber {
+        case 3:
+            return onBack?() ?? false
+        case 4:
+            return onForward?() ?? false
+        default:
+            return false
+        }
+    }
+}
+#endif
 
 extension View {
     func statusBarHiddenIfAvailable() -> some View {
@@ -252,9 +382,9 @@ extension View {
         #endif
     }
 
-    func persistentSystemOverlaysHiddenIfAvailable() -> some View {
+    func ignoresTopSafeAreaIfAvailable() -> some View {
         #if canImport(UIKit) && !os(macOS)
-        return self.persistentSystemOverlays(.hidden)
+        return self.ignoresSafeArea(.container, edges: .top)
         #else
         return self
         #endif

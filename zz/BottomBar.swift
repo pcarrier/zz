@@ -6,10 +6,12 @@ struct BottomBar: View {
     @FocusState.Binding var urlFocused: Bool
     @Binding var selectedSuggestionIndex: Int?
     let matches: [HistoryEntry]
+    @Binding var sidebarPresented: Bool
+    @Binding var settingsPresented: Bool
     let onCommit: (String) -> Void
 
     @Environment(BrowserStore.self) private var store
-    @Environment(\.openWindow) private var openWindow
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         let tab = store.focusedTab
@@ -39,12 +41,24 @@ struct BottomBar: View {
                     selectedSuggestionIndex = nil
                 }
                 .layoutPriority(1)
-            actionButtons(tab: tab)
+            if isCompact {
+                MoreMenu(
+                    tab: tab,
+                    isCompact: isCompact,
+                    settingsPresented: $settingsPresented
+                )
+                BarIconButton(name: "sidebar.right",
+                              enabled: !store.parked.isEmpty,
+                              action: { sidebarPresented = true },
+                              help: "Sidebar")
+            } else {
+                actionButtons(tab: tab)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.top, 6)
         .padding(.bottom, 2)
-        .background(.bar)
+        .background(.bar, ignoresSafeAreaEdges: .bottom)
         .overlay(alignment: .top) {
             Rectangle().fill(.separator.opacity(0.28)).frame(height: 0.5)
         }
@@ -82,21 +96,23 @@ struct BottomBar: View {
                           enabled: tab != nil,
                           action: { store.toggleZoom() },
                           help: store.zoomedTabID == nil
-                            ? "Zoom focused tile (⌃⌘F)"
-                            : "Restore layout (⌃⌘F)")
+                            ? "Zoom focused tile (⌃⌥⌘F)"
+                            : "Restore layout (⌃⌥⌘F)")
             BarIconButton(name: "tray.and.arrow.down",
                           enabled: !(tab?.isBlank ?? true),
                           action: { if let id = store.focusedTabID { store.park(id) } },
-                          help: "Park to sidebar (⌘N)")
-            BarIconButton(name: "rectangle.split.1x2", enabled: tab != nil,
-                          action: { if let id = store.focusedTabID { store.split(id, axis: .horizontal) } },
-                          help: "Split horizontal (⌘D)")
-            BarIconButton(name: "rectangle.split.2x1", enabled: tab != nil,
-                          action: { if let id = store.focusedTabID { store.split(id, axis: .vertical) } },
-                          help: "Split vertical (⇧⌘D)")
-            BarIconButton(name: "macwindow.badge.plus", enabled: true,
-                          action: { openWindow(value: WindowID()) },
-                          help: "New window (⇧⌘N)")
+                          help: "Park (⌥⌘P)")
+            BarIconButton(name: "rectangle.split.1x2", enabled: store.canSplitSelection,
+                          action: { store.splitSelection(axis: .horizontal) },
+                          help: "Horizontal Split (⌘\\)")
+            BarIconButton(name: "rectangle.split.2x1", enabled: store.canSplitSelection,
+                          action: { store.splitSelection(axis: .vertical) },
+                          help: "Vertical Split (⇧⌘\\)")
+            MoreMenu(
+                tab: tab,
+                isCompact: false,
+                settingsPresented: $settingsPresented
+            )
             BarIconButton(name: "xmark", enabled: tab != nil,
                           action: { if let id = store.focusedTabID { store.close(id) } },
                           help: "Close tile (⌘W)")
@@ -118,6 +134,130 @@ struct BottomBar: View {
         let clamped = max(0, min(matches.count - 1, next))
         selectedSuggestionIndex = clamped
         return .handled
+    }
+
+    private var isCompact: Bool {
+        #if os(macOS)
+        return false
+        #else
+        return horizontalSizeClass == .compact
+        #endif
+    }
+}
+
+private struct MoreMenu: View {
+    let tab: Tab?
+    let isCompact: Bool
+    @Binding var settingsPresented: Bool
+
+    @Environment(BrowserStore.self) private var store
+    @Environment(HistoryStore.self) private var history
+    @Environment(\.openWindow) private var openWindow
+    @AppStorage(BrowserPreferences.recordHistoryKey) private var recordHistory = true
+
+    var body: some View {
+        Menu {
+            Button {
+                openWindow(value: WindowID())
+            } label: {
+                Label("New Window", systemImage: "macwindow.badge.plus")
+            }
+
+            layoutMenu
+            privacyHistoryMenu
+
+            Divider()
+
+            Button {
+                settingsPresented = true
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 30, height: 30)
+                .contentShape(.rect)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .menuOrder(.fixed)
+        .help("More")
+    }
+
+    @ViewBuilder
+    private var layoutMenu: some View {
+        Menu {
+            Button {
+                store.selectParentGroup()
+            } label: {
+                Label("Select Parent Group", systemImage: "square.stack.3d.up")
+            }
+            .disabled(!store.canSelectParentGroup)
+
+            Button {
+                store.equalizeSelectedGroup()
+            } label: {
+                Label("Equalize Group", systemImage: "rectangle.split.2x2")
+            }
+            .disabled(!store.canTransformSelectedGroup)
+
+            Button {
+                store.rotateSelectedGroup()
+            } label: {
+                Label("Rotate Group", systemImage: "rotate.right")
+            }
+            .disabled(!store.canTransformSelectedGroup)
+
+            if isCompact {
+                Divider()
+
+                Button {
+                    if let id = store.focusedTabID { store.park(id) }
+                } label: {
+                    Label("Park", systemImage: "tray.and.arrow.down")
+                }
+                .disabled(tab?.isBlank ?? true)
+
+                Button {
+                    store.splitSelection(axis: .horizontal)
+                } label: {
+                    Label("Horizontal Split", systemImage: "rectangle.split.1x2")
+                }
+                .disabled(!store.canSplitSelection)
+
+                Button {
+                    store.splitSelection(axis: .vertical)
+                } label: {
+                    Label("Vertical Split", systemImage: "rectangle.split.2x1")
+                }
+                .disabled(!store.canSplitSelection)
+                Button(role: .destructive) {
+                    if let id = store.focusedTabID { store.close(id) }
+                } label: {
+                    Label("Close Pane", systemImage: "xmark")
+                }
+                .disabled(tab == nil)
+            }
+        } label: {
+            Label("Layout", systemImage: "rectangle.3.group")
+        }
+    }
+
+    @ViewBuilder
+    private var privacyHistoryMenu: some View {
+        Menu {
+            Toggle("Record History", isOn: $recordHistory)
+
+            Button(role: .destructive) {
+                history.clear()
+            } label: {
+                Label("Clear History", systemImage: "trash")
+            }
+        } label: {
+            Label("Privacy & History", systemImage: "hand.raised")
+        }
     }
 }
 

@@ -42,6 +42,12 @@ struct BSPView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay {
+                    if store.selectedGroupID == id {
+                        SelectedGroupOutline()
+                            .allowsHitTesting(false)
+                    }
+                }
             }
         }
     }
@@ -50,6 +56,7 @@ struct BSPView: View {
         SplitHandle(
             axis: axis,
             thickness: splitHandleHitThickness,
+            onSelect:    { store.selectGroup(id) },
             onBegin:     { store.beginRatioDrag(id) },
             onTranslate: { t in store.updateRatioDrag(id, usable: usable, translation: t) },
             onEnd:       { store.endRatioDrag(id) }
@@ -57,9 +64,19 @@ struct BSPView: View {
     }
 }
 
+private struct SelectedGroupOutline: View {
+    var body: some View {
+        Rectangle()
+            .stroke(Color.textSelection,
+                    lineWidth: PaneSelectionVisual.strokeWidth)
+            .padding(1)
+    }
+}
+
 struct SplitHandle: View {
     let axis: BSPNode.Axis
     var thickness: CGFloat = 12
+    var onSelect: () -> Void = {}
     var onBegin: () -> Void = {}
     let onTranslate: (CGFloat) -> Void
     var onEnd: () -> Void = {}
@@ -68,11 +85,13 @@ struct SplitHandle: View {
 
     init(axis: BSPNode.Axis,
          thickness: CGFloat = 12,
+         onSelect: @escaping () -> Void = {},
          onBegin: @escaping () -> Void = {},
          onTranslate: @escaping (CGFloat) -> Void,
          onEnd: @escaping () -> Void = {}) {
         self.axis = axis
         self.thickness = thickness
+        self.onSelect = onSelect
         self.onBegin = onBegin
         self.onTranslate = onTranslate
         self.onEnd = onEnd
@@ -84,11 +103,14 @@ struct SplitHandle: View {
                    height: axis == .horizontal ? thickness : nil)
             .overlay {
                 Rectangle()
-                    .fill(.separator.opacity(0.22))
+                    .fill(.separator)
                     .frame(width: axis == .vertical ? 0.5 : nil,
                            height: axis == .horizontal ? 0.5 : nil)
             }
             .contentShape(.rect)
+            .simultaneousGesture(
+                TapGesture().onEnded(onSelect)
+            )
             .gesture(
                 // Global coordinates avoid feedback as the divider moves.
                 DragGesture(minimumDistance: 2, coordinateSpace: .global)

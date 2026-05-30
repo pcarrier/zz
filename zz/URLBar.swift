@@ -92,36 +92,72 @@ struct SuggestionList: View {
     var selectedIndex: Int? = nil
     let onSelect: (HistoryEntry) -> Void
 
-    /// Approximate row height (icon + 2-line text + 8pt vertical padding × 2).
-    /// Used to cap the visible portion to ~5 rows while letting the list
-    /// scroll if the user has more matches.
-    private static let rowHeight: CGFloat = 50
     private static let maxVisibleRows = 5
+    fileprivate static let coordinateSpace = "SuggestionListCoordinateSpace"
+
+    @State private var rowFrames: [String: CGRect] = [:]
 
     var body: some View {
-        let visible = min(suggestions.count, Self.maxVisibleRows)
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(suggestions.enumerated()), id: \.element.id) { idx, entry in
-                    SuggestionRow(
-                        entry: entry,
-                        isSelected: idx == selectedIndex,
-                        onSelect: onSelect
-                    )
-                    .frame(height: Self.rowHeight)
-                    if idx < suggestions.count - 1 {
-                        Divider().opacity(0.4)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(suggestions.enumerated()), id: \.element.id) { idx, entry in
+                        SuggestionRow(
+                            entry: entry,
+                            isSelected: idx == selectedIndex,
+                            onSelect: onSelect
+                        )
+                        .id(entry.id)
+                        .background(SuggestionRowFrameReader(id: entry.id))
+                        if idx < suggestions.count - 1 {
+                            Divider().opacity(0.4)
+                        }
                     }
                 }
+                .coordinateSpace(name: Self.coordinateSpace)
+                .onPreferenceChange(SuggestionRowFramePreferenceKey.self) { frames in
+                    rowFrames = frames
+                }
+            }
+            .frame(maxHeight: maxVisibleHeight)
+            .scrollIndicators(.automatic)
+            .onChange(of: selectedSuggestionID) { _, _ in
+                scrollSelectionIntoView(proxy)
+            }
+            .onChange(of: suggestions.map(\.id)) { _, _ in
+                scrollSelectionIntoView(proxy)
             }
         }
-        .frame(maxHeight: CGFloat(visible) * Self.rowHeight)
-        .scrollIndicators(.automatic)
         .background(.regularMaterial)
         .overlay(
             Rectangle().stroke(.separator.opacity(0.4))
         )
         .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
+    }
+
+    private var selectedSuggestionID: String? {
+        guard let selectedIndex,
+              selectedIndex >= 0,
+              selectedIndex < suggestions.count else {
+            return nil
+        }
+        return suggestions[selectedIndex].id
+    }
+
+    private func scrollSelectionIntoView(_ proxy: ScrollViewProxy) {
+        guard let selectedSuggestionID else { return }
+        withAnimation(.snappy(duration: 0.12)) {
+            proxy.scrollTo(selectedSuggestionID, anchor: .center)
+        }
+    }
+
+    private var maxVisibleHeight: CGFloat? {
+        let visibleCount = min(suggestions.count, Self.maxVisibleRows)
+        guard visibleCount > 0 else { return nil }
+        let lastVisibleID = suggestions[visibleCount - 1].id
+        guard let frame = rowFrames[lastVisibleID],
+              frame.maxY > .zero else { return nil }
+        return frame.maxY
     }
 }
 
@@ -137,21 +173,21 @@ private struct SuggestionRow: View {
             selectOnce()
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "clock.arrow.circlepath")
+                Image(systemName: iconName)
                     .font(.system(size: 12))
                     .foregroundStyle(.tertiary)
                     .frame(width: 16)
-                VStack(alignment: .leading, spacing: 1) {
-                    if let title = entry.title, !title.isEmpty {
-                        Text(title)
-                            .font(.callout)
-                            .lineLimit(1)
-                    }
-                    Text(entry.url)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(displayTitle)
+                        .font(.callout.weight(.medium))
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(entry.url)
+                        .font(.system(.callout, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
@@ -170,5 +206,40 @@ private struct SuggestionRow: View {
         guard !didSelect else { return }
         didSelect = true
         onSelect(entry)
+    }
+
+    private var displayTitle: String {
+        let title = entry.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return title.isEmpty ? SiteVisual.host(for: entry.url) : title
+    }
+
+    private var iconName: String {
+        switch displayTitle {
+        case "Search": return "magnifyingglass"
+        case "Open": return "arrow.up.forward.app"
+        default: return "clock.arrow.circlepath"
+        }
+    }
+}
+
+private struct SuggestionRowFrameReader: View {
+    let id: String
+
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: SuggestionRowFramePreferenceKey.self,
+                value: [id: proxy.frame(in: .named(SuggestionList.coordinateSpace))]
+            )
+        }
+    }
+}
+
+private struct SuggestionRowFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect],
+                       nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }

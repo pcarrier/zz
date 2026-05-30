@@ -23,6 +23,7 @@ struct HostedWebView: View {
     var onInteraction: (() -> Void)? = nil
     var dropHandler: PaneDropHandler? = nil
     var shouldHost: () -> Bool = { true }
+    var reservesTopSafeArea: Bool = true
     var layoutRevision: Int = 0
 
     var body: some View {
@@ -32,6 +33,7 @@ struct HostedWebView: View {
                 onInteraction: onInteraction,
                 dropHandler: dropHandler,
                 shouldHost: shouldHost,
+                reservesTopSafeArea: reservesTopSafeArea,
                 layoutRevision: layoutRevision,
                 layoutSize: proxy.size
             )
@@ -45,6 +47,7 @@ private struct _Representable {
     let onInteraction: (() -> Void)?
     let dropHandler: PaneDropHandler?
     let shouldHost: () -> Bool
+    let reservesTopSafeArea: Bool
     let layoutRevision: Int
     let layoutSize: CGSize
 }
@@ -56,6 +59,7 @@ extension _Representable: UIViewRepresentable {
         let container = ContainerView()
         container.onInteraction = onInteraction
         container.shouldHost = shouldHost
+        container.reservesTopSafeArea = reservesTopSafeArea
         container.setLayoutRevision(layoutRevision)
         container.setLayoutSize(layoutSize)
         container.attach(webView)
@@ -65,6 +69,7 @@ extension _Representable: UIViewRepresentable {
     func updateUIView(_ container: ContainerView, context: Context) {
         container.onInteraction = onInteraction
         container.shouldHost = shouldHost
+        container.reservesTopSafeArea = reservesTopSafeArea
         container.setLayoutRevision(layoutRevision)
         container.setLayoutSize(layoutSize)
         container.attach(webView)
@@ -84,6 +89,13 @@ extension _Representable {
     final class ContainerView: UIView {
         var onInteraction: (() -> Void)?
         var shouldHost: () -> Bool = { true }
+        var reservesTopSafeArea: Bool = true {
+            didSet {
+                guard oldValue != reservesTopSafeArea else { return }
+                setNeedsLayout()
+                scheduleDeferredRefresh()
+            }
+        }
 
         private var lastInteractionAt: CFTimeInterval = 0
         private weak var hostedWebView: WKWebView?
@@ -102,6 +114,11 @@ extension _Representable {
 
         override func layoutSubviews() {
             super.layoutSubviews()
+            refreshHostedLayout()
+        }
+
+        override func safeAreaInsetsDidChange() {
+            super.safeAreaInsetsDidChange()
             refreshHostedLayout()
         }
 
@@ -206,6 +223,7 @@ extension _Representable {
             if webView.frame != frame {
                 webView.frame = frame
             }
+            updateContentInsets(for: webView)
             webView.setNeedsLayout()
             webView.scrollView.setNeedsLayout()
             webView.layoutIfNeeded()
@@ -226,6 +244,50 @@ extension _Representable {
         private func targetWebViewFrame() -> CGRect {
             let size = bounds.size.hasPaneLayoutArea ? bounds.size : layoutSize
             return CGRect(origin: .zero, size: size.normalizedForPaneLayout)
+        }
+
+        private func updateContentInsets(for webView: WKWebView) {
+            let scrollView = webView.scrollView
+            let targetTopInset = reservesTopSafeArea ? reservedTopPageInset : .zero
+            let previousTopInset = scrollView.contentInset.top
+            guard previousTopInset != targetTopInset else { return }
+
+            let wasPinnedToTop = scrollView.contentOffset.y <= -previousTopInset
+
+            var contentInset = scrollView.contentInset
+            contentInset.top = targetTopInset
+            scrollView.contentInset = contentInset
+
+            var indicatorInsets = scrollView.verticalScrollIndicatorInsets
+            indicatorInsets.top = targetTopInset
+            scrollView.verticalScrollIndicatorInsets = indicatorInsets
+
+            if wasPinnedToTop {
+                scrollView.setContentOffset(
+                    CGPoint(x: scrollView.contentOffset.x, y: -targetTopInset),
+                    animated: false
+                )
+            }
+        }
+
+        private var reservedTopPageInset: CGFloat {
+            guard safeAreaInsets.top > .zero else { return .zero }
+            guard let overlap = topSystemOverlayOverlap else { return safeAreaInsets.top }
+            return safeAreaInsets.top > overlap ? overlap : .zero
+        }
+
+        private var topSystemOverlayOverlap: CGFloat? {
+            guard let window,
+                  let statusFrame = window.windowScene?.statusBarManager?.statusBarFrame,
+                  !statusFrame.isEmpty else { return nil }
+
+            let statusFrameInWindow = window.screen.coordinateSpace.convert(
+                statusFrame,
+                to: window.coordinateSpace
+            )
+            let boundsInWindow = convert(bounds, to: window)
+            let overlap = boundsInWindow.intersection(statusFrameInWindow).height
+            return overlap > .zero ? min(safeAreaInsets.top, overlap) : .zero
         }
     }
 }

@@ -4,7 +4,10 @@ import UniformTypeIdentifiers
 private let sidebarReorderCoordinateSpace = "SidebarReorderCoordinateSpace"
 
 struct SidebarView: View {
+    var onSelect: (UUID) -> Void = { _ in }
+
     @Environment(BrowserStore.self) private var store
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var reorderInsertionIndex: Int?
     @State private var rowFrames: [UUID: CGRect] = [:]
 
@@ -14,34 +17,51 @@ struct SidebarView: View {
     }
 
     private var previewList: some View {
-        ScrollView {
-            LazyVStack(spacing: 10) {
-                ForEach(Array(store.parked.enumerated()), id: \.element) { idx, tabID in
-                    if let tab = store.tab(tabID) {
-                        SidebarParkedRow(
-                            tab: tab,
-                            tabID: tabID,
-                            index: idx,
-                            reorderInsertionIndex: reorderInsertionIndex
-                        )
+        GeometryReader { proxy in
+            let sidebarWidth = effectiveSidebarWidth(available: proxy.size.width)
+
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(Array(store.parked.enumerated()), id: \.element) { idx, tabID in
+                        if let tab = store.tab(tabID) {
+                            SidebarParkedRow(
+                                tab: tab,
+                                tabID: tabID,
+                                sidebarWidth: sidebarWidth,
+                                index: idx,
+                                reorderInsertionIndex: reorderInsertionIndex,
+                                onSelect: onSelect
+                            )
+                        }
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 12)
+                .coordinateSpace(name: sidebarReorderCoordinateSpace)
+                .onPreferenceChange(SidebarRowFramePreferenceKey.self) { frames in
+                    rowFrames = frames
+                }
+                .onDrop(of: [UTType.json.identifier],
+                        delegate: SidebarReorderDropDelegate(
+                            store: store,
+                            parkedIDs: store.parked,
+                            rowFrames: rowFrames,
+                            insertionIndex: $reorderInsertionIndex
+                        ))
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 12)
-            .coordinateSpace(name: sidebarReorderCoordinateSpace)
-            .onPreferenceChange(SidebarRowFramePreferenceKey.self) { frames in
-                rowFrames = frames
-            }
-            .onDrop(of: [UTType.json.identifier],
-                    delegate: SidebarReorderDropDelegate(
-                        store: store,
-                        parkedIDs: store.parked,
-                        rowFrames: rowFrames,
-                        insertionIndex: $reorderInsertionIndex
-                    ))
+            .scrollIndicators(.never)
         }
-        .scrollIndicators(.never)
+    }
+
+    private func effectiveSidebarWidth(available: CGFloat) -> Double {
+        #if os(macOS)
+        return store.sidebarWidth
+        #else
+        if horizontalSizeClass == .compact {
+            return Double(min(max(220, available), 320))
+        }
+        return store.sidebarWidth
+        #endif
     }
 }
 
@@ -50,8 +70,10 @@ private struct SidebarParkedRow: View {
 
     let tab: Tab
     let tabID: UUID
+    let sidebarWidth: Double
     let index: Int
     let reorderInsertionIndex: Int?
+    let onSelect: (UUID) -> Void
 
     @State private var swipeOffset: CGFloat = 0
 
@@ -82,12 +104,13 @@ private struct SidebarParkedRow: View {
 
     private var rowContent: some View {
         SidebarTilePreview(tab: tab,
-                           sidebarWidth: store.sidebarWidth,
+                           sidebarWidth: sidebarWidth,
                            shouldHostLiveView: {
                                store.isSidebarPreviewHost(tabID)
                            })
             .onTapGesture {
                 store.swapParkedWithFocused(tabID)
+                onSelect(tabID)
             }
             .contextMenu {
                 Button(role: .destructive) {
@@ -98,15 +121,15 @@ private struct SidebarParkedRow: View {
             }
             .draggable(TabRef(id: tabID)) {
                 SidebarTilePreview(tab: tab,
-                                   sidebarWidth: store.sidebarWidth,
+                                   sidebarWidth: sidebarWidth,
                                    isLive: false)
-                    .frame(width: store.sidebarWidth - 16)
+                    .frame(width: max(80, sidebarWidth - 16))
                     .opacity(0.85)
             }
     }
 
     private var dismissBackground: some View {
-        let progress = min(1, Double(swipeOffset / max(1, CGFloat(store.sidebarWidth))))
+        let progress = min(1, Double(swipeOffset / max(1, CGFloat(sidebarWidth))))
 
         return HStack {
             Image(systemName: "trash")
@@ -124,14 +147,14 @@ private struct SidebarParkedRow: View {
         DragGesture(minimumDistance: 14, coordinateSpace: .local)
             .onChanged { value in
                 guard isRightSwipe(value) else { return }
-                swipeOffset = min(value.translation.width, CGFloat(store.sidebarWidth))
+                swipeOffset = min(value.translation.width, CGFloat(sidebarWidth))
             }
             .onEnded { value in
                 guard isRightSwipe(value) else {
                     swipeOffset = 0
                     return
                 }
-                let threshold = max(72, CGFloat(store.sidebarWidth) * 0.42)
+                let threshold = max(72, CGFloat(sidebarWidth) * 0.42)
                 if value.translation.width > threshold ||
                     value.predictedEndTranslation.width > threshold * 1.2 {
                     store.discardParked(tabID)
@@ -304,7 +327,8 @@ struct SidebarTilePreview: View {
                 Color.canvas
                 HostedWebView(
                     webView: tab.webView,
-                    shouldHost: shouldHostLiveView
+                    shouldHost: shouldHostLiveView,
+                    reservesTopSafeArea: false
                 )
                     .allowsHitTesting(false)
             }

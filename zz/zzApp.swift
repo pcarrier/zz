@@ -28,8 +28,15 @@ struct zzApp: App {
                 Button("New Window") {
                     openWindow(value: WindowID())
                 }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .keyboardShortcut("n", modifiers: [.command])
             }
         }
+
+        #if os(macOS)
+        Settings {
+            SettingsView()
+                .environment(history)
+        }
+        #endif
     }
 }

@@ -39,6 +39,51 @@ enum BSPNode: Codable, Identifiable, Hashable {
         }
     }
 
+    func containsSplit(_ splitID: UUID) -> Bool {
+        switch self {
+        case .leaf:
+            return false
+        case .split(let id, _, _, let a, let b):
+            return id == splitID || a.containsSplit(splitID) || b.containsSplit(splitID)
+        }
+    }
+
+    func tabIDs(inSplit splitID: UUID) -> [UUID]? {
+        switch self {
+        case .leaf:
+            return nil
+        case .split(let id, _, _, let a, let b):
+            if id == splitID { return tabIDs() }
+            return a.tabIDs(inSplit: splitID) ?? b.tabIDs(inSplit: splitID)
+        }
+    }
+
+    func parentSplitID(containingTab tabID: UUID) -> UUID? {
+        switch self {
+        case .leaf:
+            return nil
+        case .split(let id, _, _, let a, let b):
+            if a.contains(tabID) {
+                return a.parentSplitID(containingTab: tabID) ?? id
+            }
+            if b.contains(tabID) {
+                return b.parentSplitID(containingTab: tabID) ?? id
+            }
+            return nil
+        }
+    }
+
+    func parentSplitID(containingSplit splitID: UUID) -> UUID? {
+        switch self {
+        case .leaf:
+            return nil
+        case .split(let id, _, _, let a, let b):
+            if a.id == splitID || b.id == splitID { return id }
+            return a.parentSplitID(containingSplit: splitID) ??
+                   b.parentSplitID(containingSplit: splitID)
+        }
+    }
+
     func replacingLeaf(_ tabID: UUID, with newTabID: UUID) -> BSPNode {
         switch self {
         case .leaf(let id):
@@ -68,6 +113,29 @@ enum BSPNode: Codable, Identifiable, Hashable {
                                              newTabID: newTabID, side: side),
                           second: b.splitting(tabID, axis: newAxis,
                                               newTabID: newTabID, side: side))
+        }
+    }
+
+    func splittingGroup(_ splitID: UUID, axis newAxis: Axis,
+                        newTabID: UUID, side: SplitSide = .after) -> BSPNode {
+        switch self {
+        case .leaf:
+            return self
+        case .split(let id, let axis, let ratio, let a, let b):
+            if id == splitID {
+                let existing = self
+                let fresh = BSPNode.leaf(tabID: newTabID)
+                return .split(
+                    id: UUID(), axis: newAxis, ratio: 0.5,
+                    first:  side == .before ? fresh : existing,
+                    second: side == .before ? existing : fresh
+                )
+            }
+            return .split(id: id, axis: axis, ratio: ratio,
+                          first: a.splittingGroup(splitID, axis: newAxis,
+                                                  newTabID: newTabID, side: side),
+                          second: b.splittingGroup(splitID, axis: newAxis,
+                                                   newTabID: newTabID, side: side))
         }
     }
 
@@ -139,6 +207,43 @@ enum BSPNode: Codable, Identifiable, Hashable {
             return .split(id: id, axis: axis, ratio: r,
                           first: a.settingRatio(ratio, for: splitID),
                           second: b.settingRatio(ratio, for: splitID))
+        }
+    }
+
+    func equalizingRatios(in splitID: UUID) -> BSPNode {
+        switch self {
+        case .leaf:
+            return self
+        case .split(let id, let axis, let ratio, let a, let b):
+            if id == splitID { return equalizingAllRatios() }
+            return .split(id: id, axis: axis, ratio: ratio,
+                          first: a.equalizingRatios(in: splitID),
+                          second: b.equalizingRatios(in: splitID))
+        }
+    }
+
+    private func equalizingAllRatios() -> BSPNode {
+        switch self {
+        case .leaf:
+            return self
+        case .split(let id, let axis, _, let a, let b):
+            return .split(id: id, axis: axis, ratio: 0.5,
+                          first: a.equalizingAllRatios(),
+                          second: b.equalizingAllRatios())
+        }
+    }
+
+    func togglingAxis(for splitID: UUID) -> BSPNode {
+        switch self {
+        case .leaf:
+            return self
+        case .split(let id, let axis, let ratio, let a, let b):
+            let nextAxis: Axis = axis == .horizontal ? .vertical : .horizontal
+            return .split(id: id,
+                          axis: id == splitID ? nextAxis : axis,
+                          ratio: ratio,
+                          first: a.togglingAxis(for: splitID),
+                          second: b.togglingAxis(for: splitID))
         }
     }
 
@@ -258,6 +363,7 @@ final class BrowserStore {
 
     var root: BSPNode
     var focusedTabID: UUID?
+    var selectedGroupID: UUID?
     var parked: [UUID] = []
     var sidebarWidth: Double = 220
 
@@ -327,7 +433,8 @@ final class BrowserStore {
             self?.scheduleSave()
         }
         tab.onNewWindowRequest = { [weak self] configuration, navigationAction in
-            self?.openNewWindowInSidebar(
+            self?.handleNewWindowRequest(
+                from: tab.id,
                 configuration: configuration,
                 navigationAction: navigationAction
             )
@@ -372,6 +479,24 @@ final class BrowserStore {
         return tabs[id]
     }
 
+    var canSplitSelection: Bool {
+        if let selectedGroupID, root.containsSplit(selectedGroupID) { return true }
+        guard let focusedTabID else { return false }
+        return tabs[focusedTabID] != nil && root.contains(focusedTabID)
+    }
+
+    var canSelectParentGroup: Bool {
+        if let selectedGroupID, root.containsSplit(selectedGroupID) {
+            return root.parentSplitID(containingSplit: selectedGroupID) != nil
+        }
+        guard let focusedTabID else { return false }
+        return root.parentSplitID(containingTab: focusedTabID) != nil
+    }
+
+    var canTransformSelectedGroup: Bool {
+        targetGroupID() != nil
+    }
+
     // MARK: Tabs
 
     @discardableResult
@@ -383,8 +508,65 @@ final class BrowserStore {
     }
 
     func focus(_ tabID: UUID) {
+        selectedGroupID = nil
         focusedTabID = tabID
         scheduleSave()
+    }
+
+    func selectGroup(_ splitID: UUID) {
+        guard root.containsSplit(splitID) else { return }
+        selectedGroupID = splitID
+    }
+
+    func selectParentGroup() {
+        if let selectedGroupID, root.containsSplit(selectedGroupID) {
+            guard let parentID = root.parentSplitID(containingSplit: selectedGroupID) else { return }
+            self.selectedGroupID = parentID
+            return
+        }
+
+        guard let focusedTabID,
+              let parentID = root.parentSplitID(containingTab: focusedTabID) else {
+            return
+        }
+        selectedGroupID = parentID
+    }
+
+    func equalizeSelectedGroup() {
+        guard let splitID = targetGroupID(),
+              let resizedTabIDs = root.tabIDs(inSplit: splitID) else { return }
+        root = root.equalizingRatios(in: splitID)
+        selectedGroupID = splitID
+        markPaneLayoutsChanged(resizedTabIDs)
+        scheduleSave()
+    }
+
+    func rotateSelectedGroup() {
+        guard let splitID = targetGroupID(),
+              let resizedTabIDs = root.tabIDs(inSplit: splitID) else { return }
+        root = root.togglingAxis(for: splitID)
+        selectedGroupID = splitID
+        markPaneLayoutsChanged(resizedTabIDs)
+        scheduleSave()
+    }
+
+    private func targetGroupID() -> UUID? {
+        if let selectedGroupID, root.containsSplit(selectedGroupID) {
+            return selectedGroupID
+        }
+        guard let focusedTabID else { return nil }
+        return root.parentSplitID(containingTab: focusedTabID)
+    }
+
+    @discardableResult
+    func splitSelection(axis: BSPNode.Axis,
+                        side: SplitSide = .after,
+                        loadURL: String? = nil) -> UUID? {
+        if let selectedGroupID, root.containsSplit(selectedGroupID) {
+            return splitGroup(selectedGroupID, axis: axis, side: side, loadURL: loadURL)
+        }
+        guard let focusedTabID else { return nil }
+        return split(focusedTabID, axis: axis, side: side, loadURL: loadURL)
     }
 
     @discardableResult
@@ -396,8 +578,28 @@ final class BrowserStore {
         if let loadURL { tabs[newID]?.load(loadURL) }
         root = root.splitting(tabID, axis: axis, newTabID: newID, side: side)
         focusedTabID = newID
+        selectedGroupID = nil
         if loadURL == nil { focusURLBarTrigger &+= 1 }
         markPaneLayoutsChanged([tabID])
+        scheduleSave()
+        return newID
+    }
+
+    @discardableResult
+    func splitGroup(_ splitID: UUID, axis: BSPNode.Axis,
+                    side: SplitSide = .after, loadURL: String? = nil) -> UUID? {
+        guard root.containsSplit(splitID),
+              let resizedTabIDs = root.tabIDs(inSplit: splitID) else {
+            return nil
+        }
+
+        let newID = makeBlankTab()
+        if let loadURL { tabs[newID]?.load(loadURL) }
+        root = root.splittingGroup(splitID, axis: axis, newTabID: newID, side: side)
+        focusedTabID = newID
+        selectedGroupID = nil
+        if loadURL == nil { focusURLBarTrigger &+= 1 }
+        markPaneLayoutsChanged(resizedTabIDs)
         scheduleSave()
         return newID
     }
@@ -414,6 +616,7 @@ final class BrowserStore {
         case .center:
             tabs[tabID]?.load(droppedURL)
             focusedTabID = tabID
+            selectedGroupID = nil
             scheduleSave()
             return true
         case .top:
@@ -475,12 +678,14 @@ final class BrowserStore {
         }
 
         focusedTabID = parkedTabID
+        selectedGroupID = nil
         scheduleSave()
         return true
     }
 
     func close(_ tabID: UUID) {
         if zoomedTabID == tabID { zoomedTabID = nil }
+        selectedGroupID = nil
         let expandedTabIDs = root.tabIDsExpandedByRemoving(tabID)
         let focusAfterClose = root.tabIDToFocusAfterRemoving(tabID)
         if let newRoot = root.removing(tabID) {
@@ -508,6 +713,7 @@ final class BrowserStore {
     private var dragInitialRatios: [UUID: Double] = [:]
 
     func beginRatioDrag(_ splitID: UUID) {
+        selectGroup(splitID)
         if dragInitialRatios[splitID] == nil {
             dragInitialRatios[splitID] = root.ratio(forSplit: splitID)
         }
@@ -528,6 +734,7 @@ final class BrowserStore {
     func moveFocus(_ direction: Direction) {
         guard let current = focusedTabID,
               let next = root.neighbor(of: current, direction: direction) else { return }
+        selectedGroupID = nil
         focusedTabID = next
         scheduleSave()
     }
@@ -569,6 +776,7 @@ final class BrowserStore {
         } else if let id = focusedTabID {
             zoomedTabID = id
         }
+        selectedGroupID = nil
         scheduleSave()
     }
 
@@ -581,13 +789,54 @@ final class BrowserStore {
         }
     }
 
-    func openNewWindowInSidebar(
+    func handleNewWindowRequest(
+        from sourceTabID: UUID,
         configuration: WKWebViewConfiguration,
         navigationAction: WKNavigationAction
+    ) -> WKWebView? {
+        switch BrowserPreferences.newWindowPolicy {
+        case .sidebar:
+            return openNewWindowInSidebar(configuration: configuration)
+        case .splitRight:
+            return openNewWindowBeside(
+                sourceTabID,
+                configuration: configuration
+            )
+        case .samePane:
+            if let url = navigationAction.request.url {
+                tabs[sourceTabID]?.webView.load(URLRequest(url: url))
+            }
+            return nil
+        case .block:
+            return nil
+        }
+    }
+
+    private func openNewWindowInSidebar(
+        configuration: WKWebViewConfiguration
     ) -> WKWebView? {
         let newID = makeBlankTab(configuration: configuration)
         parked.insert(newID, at: 0)
         if zoomedTabID != nil { zoomedTabID = nil }
+        scheduleSave()
+        return tabs[newID]?.webView
+    }
+
+    private func openNewWindowBeside(
+        _ sourceTabID: UUID,
+        configuration: WKWebViewConfiguration
+    ) -> WKWebView? {
+        guard tabs[sourceTabID] != nil, root.contains(sourceTabID) else {
+            return openNewWindowInSidebar(configuration: configuration)
+        }
+
+        let newID = makeBlankTab(configuration: configuration)
+        root = root.splitting(sourceTabID, axis: .vertical,
+                              newTabID: newID, side: .after)
+        focusedTabID = newID
+        selectedGroupID = nil
+        if zoomedTabID != nil { zoomedTabID = nil }
+        markPaneLayoutsChanged([sourceTabID])
         scheduleSave()
         return tabs[newID]?.webView
     }
@@ -605,6 +854,7 @@ final class BrowserStore {
         root = root.replacingLeaf(tabID, with: newID)
         parked.insert(tabID, at: 0)
         focusedTabID = newID
+        selectedGroupID = nil
         focusURLBarTrigger &+= 1
         scheduleSave()
     }
@@ -706,6 +956,50 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     var lastVisited: Date
 }
 
+enum OmniboxSuggestions {
+    static func entries(matching query: String,
+                        historyMatches: [HistoryEntry],
+                        limit: Int,
+                        searchTemplate: String = SearchPreferences.activeTemplate) -> [HistoryEntry] {
+        var seen = Set<String>()
+        var entries: [HistoryEntry] = []
+
+        if let direct = directEntry(for: query, searchTemplate: searchTemplate),
+           seen.insert(direct.url).inserted {
+            entries.append(direct)
+        }
+
+        for entry in historyMatches where seen.insert(entry.url).inserted {
+            entries.append(entry)
+            if entries.count >= limit { break }
+        }
+
+        return entries
+    }
+
+    static func directEntry(for query: String,
+                            searchTemplate: String = SearchPreferences.activeTemplate) -> HistoryEntry? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let resolved = URLNormalizer.resolve(trimmed, searchTemplate: searchTemplate) else {
+            return nil
+        }
+
+        return HistoryEntry(
+            url: resolved.absoluteString,
+            title: directTitle(for: trimmed),
+            lastVisited: .now
+        )
+    }
+
+    private static func directTitle(for query: String) -> String {
+        if query.contains(" ") || !query.contains(".") {
+            return "Search"
+        }
+        return "Open"
+    }
+}
+
 @MainActor
 @Observable
 final class HistoryStore {
@@ -723,12 +1017,18 @@ final class HistoryStore {
     }
 
     func record(url: String, title: String?) {
+        guard BrowserPreferences.recordsHistory else { return }
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.lowercased() != "about:blank" else { return }
         var copy = entries.filter { $0.url != trimmed }
         copy.insert(HistoryEntry(url: trimmed, title: title, lastVisited: .now), at: 0)
         if copy.count > limit { copy = Array(copy.prefix(limit)) }
         entries = copy
+        scheduleSave()
+    }
+
+    func clear() {
+        entries = []
         scheduleSave()
     }
 
@@ -745,6 +1045,14 @@ final class HistoryStore {
             .sorted { $0.1 == $1.1 ? $0.0.lastVisited > $1.0.lastVisited : $0.1 > $1.1 }
             .prefix(limit)
             .map { $0.0 }
+    }
+
+    func omniboxSuggestions(matching query: String, limit: Int = 8) -> [HistoryEntry] {
+        OmniboxSuggestions.entries(
+            matching: query,
+            historyMatches: suggestions(matching: query, limit: limit),
+            limit: limit
+        )
     }
 
     private func scheduleSave() {
@@ -824,13 +1132,8 @@ private extension Character {
 // MARK: - URL normalization
 
 enum URLNormalizer {
-    private static let searchQueryAllowed: CharacterSet = {
-        var allowed = CharacterSet.urlQueryAllowed
-        allowed.remove(charactersIn: "&=?+#")
-        return allowed
-    }()
-
-    static func resolve(_ input: String) -> URL? {
+    static func resolve(_ input: String,
+                        searchTemplate: String = SearchPreferences.activeTemplate) -> URL? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if let url = URL(string: trimmed), let scheme = url.scheme,
@@ -838,8 +1141,7 @@ enum URLNormalizer {
             return url
         }
         if trimmed.contains(" ") || !trimmed.contains(".") {
-            let q = trimmed.addingPercentEncoding(withAllowedCharacters: searchQueryAllowed) ?? trimmed
-            return URL(string: "https://duckduckgo.com/?q=\(q)")
+            return SearchPreferences.searchURL(for: trimmed, template: searchTemplate)
         }
         return URL(string: "https://" + trimmed)
     }
