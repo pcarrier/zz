@@ -106,6 +106,9 @@ final class Tab {
     private var httpAuthCredentials: [HTTPAuthKey: URLCredential] = [:]
 
     @ObservationIgnored
+    private var lastHTTPAuthCredentialsTried: [HTTPAuthKey: URLCredential] = [:]
+
+    @ObservationIgnored
     private var pendingHTTPAuthCompletions:
         [HTTPAuthKey: [(URLSession.AuthChallengeDisposition, URLCredential?) -> Void]] = [:]
 
@@ -295,22 +298,67 @@ final class Tab {
     ) {
         let protectionSpace = challenge.protectionSpace
         let key = HTTPAuthKey(protectionSpace)
+        let storedCredential = HTTPAuthCredentialStore.credential(for: key)
+        let proposedCredential = challenge.proposedCredential
 
         let failedPreviousCredential = challenge.previousFailureCount > 0
         if failedPreviousCredential {
-            clearHTTPAuthCredential(for: key, protectionSpace: protectionSpace)
-        } else if let credential = httpAuthCredentials[key]
-                    ?? URLCredentialStorage.shared.defaultCredential(for: protectionSpace)
-                    ?? HTTPAuthCredentialStore.credential(for: key) {
-            httpAuthCredentials[key] = credential
-            URLCredentialStorage.shared.set(credential, for: protectionSpace)
-            URLCredentialStorage.shared.setDefaultCredential(credential, for: protectionSpace)
-            completionHandler(.useCredential, credential)
-            return
-        } else if let credential = challenge.proposedCredential {
-            httpAuthCredentials[key] = credential
-            completionHandler(.useCredential, credential)
-            return
+            if let storedCredential,
+               !credentialsMatch(storedCredential, proposedCredential),
+               !credentialsMatch(storedCredential, lastHTTPAuthCredentialsTried[key]) {
+                useHTTPAuthCredential(
+                    storedCredential,
+                    key: key,
+                    protectionSpace: protectionSpace,
+                    remember: true,
+                    completionHandler: completionHandler
+                )
+                return
+            }
+            clearHTTPAuthCredential(for: key, protectionSpace: protectionSpace, removeStored: true)
+        } else {
+            lastHTTPAuthCredentialsTried.removeValue(forKey: key)
+
+            if let credential = httpAuthCredentials[key] {
+                useHTTPAuthCredential(
+                    credential,
+                    key: key,
+                    protectionSpace: protectionSpace,
+                    remember: false,
+                    completionHandler: completionHandler
+                )
+                return
+            }
+            if let credential = storedCredential {
+                useHTTPAuthCredential(
+                    credential,
+                    key: key,
+                    protectionSpace: protectionSpace,
+                    remember: true,
+                    completionHandler: completionHandler
+                )
+                return
+            }
+            if let credential = URLCredentialStorage.shared.defaultCredential(for: protectionSpace) {
+                useHTTPAuthCredential(
+                    credential,
+                    key: key,
+                    protectionSpace: protectionSpace,
+                    remember: false,
+                    completionHandler: completionHandler
+                )
+                return
+            }
+            if let credential = proposedCredential {
+                useHTTPAuthCredential(
+                    credential,
+                    key: key,
+                    protectionSpace: protectionSpace,
+                    remember: false,
+                    completionHandler: completionHandler
+                )
+                return
+            }
         }
 
         if var pending = pendingHTTPAuthCompletions[key] {
@@ -388,6 +436,23 @@ final class Tab {
         #endif
     }
 
+    private func useHTTPAuthCredential(
+        _ credential: URLCredential,
+        key: HTTPAuthKey,
+        protectionSpace: URLProtectionSpace,
+        remember: Bool,
+        completionHandler: (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        httpAuthCredentials[key] = credential
+        lastHTTPAuthCredentialsTried[key] = credential
+        if remember {
+            HTTPAuthCredentialStore.set(credential, for: key)
+        }
+        URLCredentialStorage.shared.set(credential, for: protectionSpace)
+        URLCredentialStorage.shared.setDefaultCredential(credential, for: protectionSpace)
+        completionHandler(.useCredential, credential)
+    }
+
     private func completeHTTPAuthChallenge(
         key: HTTPAuthKey,
         protectionSpace: URLProtectionSpace,
@@ -396,6 +461,7 @@ final class Tab {
     ) {
         if disposition == .useCredential, let credential {
             httpAuthCredentials[key] = credential
+            lastHTTPAuthCredentialsTried[key] = credential
             HTTPAuthCredentialStore.set(credential, for: key)
             URLCredentialStorage.shared.set(credential, for: protectionSpace)
             URLCredentialStorage.shared.setDefaultCredential(credential, for: protectionSpace)
@@ -406,14 +472,26 @@ final class Tab {
         }
     }
 
-    private func clearHTTPAuthCredential(for key: HTTPAuthKey, protectionSpace: URLProtectionSpace) {
+    private func clearHTTPAuthCredential(
+        for key: HTTPAuthKey,
+        protectionSpace: URLProtectionSpace,
+        removeStored: Bool
+    ) {
         if let credential = httpAuthCredentials.removeValue(forKey: key) {
             URLCredentialStorage.shared.remove(credential, for: protectionSpace)
         }
         if let credential = URLCredentialStorage.shared.defaultCredential(for: protectionSpace) {
             URLCredentialStorage.shared.remove(credential, for: protectionSpace)
         }
-        HTTPAuthCredentialStore.remove(for: key)
+        lastHTTPAuthCredentialsTried.removeValue(forKey: key)
+        if removeStored {
+            HTTPAuthCredentialStore.remove(for: key)
+        }
+    }
+
+    private func credentialsMatch(_ lhs: URLCredential?, _ rhs: URLCredential?) -> Bool {
+        guard let lhs, let rhs else { return false }
+        return lhs.user == rhs.user && lhs.password == rhs.password
     }
 
     private func wire() {
