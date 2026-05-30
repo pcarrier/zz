@@ -92,19 +92,31 @@ struct SuggestionList: View {
     var selectedIndex: Int? = nil
     let onSelect: (HistoryEntry) -> Void
 
+    /// Approximate row height (icon + 2-line text + 8pt vertical padding × 2).
+    /// Used to cap the visible portion to ~5 rows while letting the list
+    /// scroll if the user has more matches.
+    private static let rowHeight: CGFloat = 50
+    private static let maxVisibleRows = 5
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(suggestions.enumerated()), id: \.element.id) { idx, entry in
-                SuggestionRow(
-                    entry: entry,
-                    isSelected: idx == selectedIndex,
-                    onSelect: onSelect
-                )
-                if idx < suggestions.count - 1 {
-                    Divider().opacity(0.4)
+        let visible = min(suggestions.count, Self.maxVisibleRows)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(suggestions.enumerated()), id: \.element.id) { idx, entry in
+                    SuggestionRow(
+                        entry: entry,
+                        isSelected: idx == selectedIndex,
+                        onSelect: onSelect
+                    )
+                    .frame(height: Self.rowHeight)
+                    if idx < suggestions.count - 1 {
+                        Divider().opacity(0.4)
+                    }
                 }
             }
         }
+        .frame(maxHeight: CGFloat(visible) * Self.rowHeight)
+        .scrollIndicators(.automatic)
         .background(.regularMaterial)
         .overlay(
             Rectangle().stroke(.separator.opacity(0.4))

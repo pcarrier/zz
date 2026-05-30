@@ -33,7 +33,9 @@ private struct BrowserScene: View {
 
     private var matches: [HistoryEntry] {
         guard urlFocused else { return [] }
-        return history.suggestions(matching: draft, limit: 8)
+        // Fetch up to 100; the suggestion list caps the visible rows and
+        // makes the rest scrollable.
+        return history.suggestions(matching: draft, limit: 100)
     }
 
     var body: some View {
