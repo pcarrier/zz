@@ -3,7 +3,9 @@ import WebKit
 import Observation
 import UniformTypeIdentifiers
 import Security
-#if !os(macOS)
+#if os(macOS)
+import AppKit
+#else
 import UIKit
 #endif
 
@@ -879,6 +881,38 @@ private final class SameWindowUIDelegate: NSObject, WKUIDelegate {
     func webViewDidClose(_ webView: WKWebView) {
         owner?.handleCloseWindowRequest()
     }
+
+    func webView(_ webView: WKWebView,
+                 requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo,
+                 type: WKMediaCaptureType,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        decisionHandler(.prompt)
+    }
+
+    #if !os(macOS)
+    func webView(_ webView: WKWebView,
+                 requestDeviceOrientationAndMotionPermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        decisionHandler(.prompt)
+    }
+    #endif
+
+    #if os(macOS)
+    func webView(_ webView: WKWebView,
+                 runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.begin { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
+    }
+    #endif
 }
 
 // MARK: - Persistence
