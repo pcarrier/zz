@@ -9,7 +9,7 @@ import AppKit
 import UIKit
 #endif
 
-private struct HTTPAuthKey: Hashable {
+nonisolated private struct HTTPAuthKey: Hashable {
     let host: String
     let port: Int
     let realm: String
@@ -43,7 +43,7 @@ private struct StoredHTTPAuthCredential: Codable {
 // later challenges for one protection space -- which only append here and never
 // create their own alert -- would be orphaned when the Tab's dictionary died,
 // hanging those WebKit challenges until they time out.
-private final class HTTPAuthPendingCompletions {
+nonisolated private final class HTTPAuthPendingCompletions {
     private var completions: [(URLSession.AuthChallengeDisposition, URLCredential?) -> Void]
     private var answered = false
 
@@ -204,6 +204,12 @@ final class Tab {
     @ObservationIgnored
     private var lastScrollOffset: CGPoint = .zero
 
+    // Set by the contentOffset observer when a genuine (non-navigation) user
+    // scroll lands; checked by the deferred scroll-restore in didFinishNavigation
+    // so a user scroll within the 150ms restore delay is not snapped back.
+    @ObservationIgnored
+    private var userScrolledSinceFinish: Bool = false
+
     // True while a navigation is in flight (or the WebContent process is being
     // recovered). WebKit resets contentOffset to zero during these transitions,
     // so zero offsets are ignored only while this is set -- a genuine user
@@ -213,9 +219,21 @@ final class Tab {
 
     // True while performing the initial programmatic load of a restored tab.
     // Suppresses history recording so session restore does not reorder/re-stamp
-    // the history LRU. Cleared after the first didFinish.
+    // the history LRU. WebKit commonly delivers the page <title> asynchronously
+    // AFTER didFinish (and both the title KVO and didFinish hop through their own
+    // Task { @MainActor }), so clearing this synchronously in didFinish lets the
+    // restored page's late title leak into history and re-stamp the very LRU this
+    // flag protects. Instead didFinish schedules a short deferred clear (see
+    // restoreClearGeneration), keeping suppression active across the turns where
+    // that late title lands while still always clearing so it never sticks.
     @ObservationIgnored
     private var isRestoring: Bool = false
+
+    // Bumped whenever isRestoring is set or force-cleared; the deferred clear
+    // scheduled by didFinish only clears if its captured generation still matches,
+    // so a new navigation (load/goBack) starting during the delay is not stomped.
+    @ObservationIgnored
+    private var restoreClearGeneration: Int = 0
 
     @ObservationIgnored
     private var httpAuthCredentials: [HTTPAuthKey: URLCredential] = [:]
@@ -313,8 +331,9 @@ final class Tab {
                 lastScrollOffset = scrollOffset
             }
             // This initial load originates from session restore, not user
-            // navigation: suppress history recording until the first didFinish.
+            // navigation: suppress history recording until the restore settles.
             isRestoring = true
+            restoreClearGeneration &+= 1
             isNavigationInFlight = true
             webView.load(URLRequest(url: target))
         }
@@ -332,8 +351,12 @@ final class Tab {
         }
     }
 
-    func reload()    { webView.reload() }
+    func reload()    {
+        isNavigationInFlight = true
+        webView.reload()
+    }
     func forceReload() {
+        isNavigationInFlight = true
         if webView.url != nil {
             webView.reloadFromOrigin()
         } else if let target = URLNormalizer.resolve(currentURL) {
@@ -345,8 +368,14 @@ final class Tab {
             webView.load(request)
         }
     }
-    func goBack()    { webView.goBack() }
-    func goForward() { webView.goForward() }
+    func goBack()    {
+        isNavigationInFlight = true
+        webView.goBack()
+    }
+    func goForward() {
+        isNavigationInFlight = true
+        webView.goForward()
+    }
     func stop()      { webView.stopLoading() }
 
     func focusForBrowsing() {
@@ -420,8 +449,10 @@ final class Tab {
         pendingScrollRestore = nil
         isNavigationInFlight = true
         // An explicit user load is genuine navigation: stop suppressing history
-        // even if the restore's initial load has not finished yet.
+        // even if the restore's initial load has not finished yet. Bumping the
+        // generation also voids any deferred restore-clear still pending.
         isRestoring = false
+        restoreClearGeneration &+= 1
         currentURL = target.absoluteString
         notifyPersistenceChanged()
         webView.load(URLRequest(url: target))
@@ -462,6 +493,11 @@ final class Tab {
         webView.customUserAgent = DesktopSiteMode.customUserAgent(requestsDesktop: requestsDesktopSite)
         #endif
         if reload, webView.url != nil {
+            // Mirror reload()/goBack()/load(): mark the navigation in flight so the
+            // contentOffset KVO ignores WebKit's reset-to-zero during this reload.
+            // Without this the spurious zero is treated as a user scroll and
+            // persisted as scrollY=0, silently losing the saved scroll position.
+            isNavigationInFlight = true
             webView.reload()
         }
     }
@@ -479,7 +515,21 @@ final class Tab {
 
     func didFinishNavigation() {
         isNavigationInFlight = false
-        isRestoring = false
+        // Defer clearing isRestoring rather than clearing it here: WebKit often
+        // delivers the page <title> in a later turn, after didFinish, and clearing
+        // synchronously would let that late title's KVO observer record the restored
+        // URL and re-stamp the history LRU. The deferred clear keeps suppression
+        // active across those turns; it no-ops if a newer navigation (which bumps
+        // restoreClearGeneration) started in the meantime, and always clears so the
+        // flag never sticks even for title-less pages.
+        if isRestoring {
+            let generation = restoreClearGeneration
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self, self.restoreClearGeneration == generation else { return }
+                self.isRestoring = false
+            }
+        }
         // CSS zoom is reset by each navigation on iOS; macOS's native pageZoom
         // persists across loads but re-applying is harmless and keeps both paths
         // identical.
@@ -490,9 +540,20 @@ final class Tab {
         guard let pending = pendingScrollRestore else { return }
         pendingScrollRestore = nil
         #if !os(macOS)
+        // Start the restore window with a clean slate; the contentOffset observer
+        // flips this true if the user scrolls before the deferred restore fires.
+        userScrolledSinceFinish = false
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
-            self?.webView.scrollView.setContentOffset(pending, animated: false)
+            guard let self else { return }
+            // A genuine user scroll during the delay takes precedence over the
+            // restore; snapping back would discard their interaction.
+            guard !self.userScrolledSinceFinish else { return }
+            // A new navigation started during the delay (load/goBack set this true
+            // again); `pending` is page A's stale offset and must not be snapped onto
+            // the now-loading page B.
+            guard !self.isNavigationInFlight else { return }
+            self.webView.scrollView.setContentOffset(pending, animated: false)
         }
         #endif
     }
@@ -504,6 +565,7 @@ final class Tab {
         // scroll-to-zero recording and, for a failed restore load, history recording.
         isNavigationInFlight = false
         isRestoring = false
+        restoreClearGeneration &+= 1
         pendingScrollRestore = nil
     }
 
@@ -811,6 +873,12 @@ final class Tab {
                     // so we keep the pre-transition offset. Once the page has
                     // settled, a genuine user scroll back to (0,0) is recorded.
                     if offset == .zero, self.isNavigationInFlight { return }
+                    // A scroll observed while no navigation is in flight is the
+                    // user moving the page; flag it so the deferred scroll-restore
+                    // in didFinishNavigation does not snap it back.
+                    if !self.isNavigationInFlight {
+                        self.userScrolledSinceFinish = true
+                    }
                     self.lastScrollOffset = offset
                     // Schedule a debounced snapshot save so the scroll position is
                     // actually persisted; otherwise scrollX/scrollY only get written
@@ -1111,6 +1179,19 @@ private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
         }
     }
 
+    func webView(
+        _ webView: WKWebView,
+        didSameDocumentNavigation navigation: WKNavigation!
+    ) {
+        // A same-document navigation (in-page #fragment back/forward, or an SPA
+        // history.pushState) does not fire didFinish/didFail, so isNavigationInFlight
+        // set by goBack/goForward/load would otherwise stay stuck true. Treat it as a
+        // finished navigation so scroll/history bookkeeping resumes.
+        Task { @MainActor [weak owner] in
+            owner?.didFinishNavigation()
+        }
+    }
+
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor [weak owner] in
             owner?.handleNavigationFailure()
@@ -1134,6 +1215,13 @@ private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
         // explicitly marks as an attachment -- as a download. Without this the
         // load is silently cancelled and the file is dropped.
         if !navigationResponse.canShowMIMEType || isAttachment(navigationResponse.response) {
+            // WebKit converts this navigation into a download and never fires
+            // didFinish/didFail for it, so didFinishNavigation/handleNavigationFailure
+            // would never run -- leaving isNavigationInFlight/isRestoring stuck true.
+            // Clear them now so scroll/history bookkeeping behaves like a settled load.
+            Task { @MainActor [weak owner] in
+                owner?.handleNavigationFailure()
+            }
             decisionHandler(.download)
             return
         }
@@ -1165,6 +1253,12 @@ private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
     }
 
     private func attach(_ download: WKDownload) {
+        // Backstop: a navigation that becomes a download never fires
+        // didFinish/didFail, so clear the owner's in-flight navigation flags here
+        // too (in case the response policy path above was bypassed).
+        Task { @MainActor [weak owner] in
+            owner?.handleNavigationFailure()
+        }
         let delegate = DownloadDelegate { [weak self] finished in
             self?.downloadDelegates.removeValue(forKey: ObjectIdentifier(finished))
         }

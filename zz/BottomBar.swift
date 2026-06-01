@@ -500,6 +500,7 @@ private struct ReloadControl: View {
     let tab: Tab?
     let onInteraction: () -> Void
     @State private var suppressNextTap = false
+    @State private var suppressResetTask: Task<Void, Never>?
 
     var body: some View {
         if tab?.isLoading == true {
@@ -533,13 +534,29 @@ private struct ReloadControl: View {
                         onInteraction()
                         suppressNextTap = true
                         tab?.forceReload()
-                        Task { @MainActor in
+                        suppressResetTask?.cancel()
+                        suppressResetTask = Task { @MainActor in
                             try? await Task.sleep(for: .milliseconds(700))
+                            guard !Task.isCancelled else { return }
                             suppressNextTap = false
                         }
                     }
             )
             .help("Reload (⌘R), Force Reload (long-press or ⇧⌘R)")
+            .onChange(of: tab?.isLoading) { _, _ in
+                suppressResetTask?.cancel()
+                suppressResetTask = nil
+                suppressNextTap = false
+            }
+            .onChange(of: tab?.id) { _, _ in
+                suppressResetTask?.cancel()
+                suppressResetTask = nil
+                suppressNextTap = false
+            }
+            .onDisappear {
+                suppressResetTask?.cancel()
+                suppressResetTask = nil
+            }
         }
     }
 

@@ -438,6 +438,10 @@ extension _Representable {
                 fullscreenObservation?.invalidate()
                 fullscreenObservation = nil
                 hostedWebView = nil
+                // Break the retain cycle: the drop handler closures strongly
+                // capture the BrowserStore, so clear it when we relinquish the
+                // web view. attach() re-establishes it via configureDropRouting.
+                (webView as? PaneDropRoutingWebView)?.dropHandler = nil
             }
             guard webView.fullscreenState == .notInFullscreen,
                   webView.superview === self else { return }

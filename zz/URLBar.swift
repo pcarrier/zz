@@ -223,8 +223,10 @@ private struct SuggestionRow: View {
     /// Title ranges target the title string when present; otherwise we display
     /// the host and have no title ranges to apply.
     private var titleRanges: [Range<String.Index>] {
-        let raw = item.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return raw.isEmpty ? [] : item.titleRanges
+        // Ranges from OmniboxRanker.classify are built against the RAW title
+        // (`title ?? ""`). They are valid only when displayTitle renders that
+        // same raw string; once we fall back to host, drop them.
+        item.title?.isEmpty == false ? item.titleRanges : []
     }
 
     @ViewBuilder
@@ -258,7 +260,10 @@ private struct SuggestionRow: View {
     }
 
     private var displayTitle: String {
-        let title = item.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Must be the EXACT string titleRanges were computed against (the raw,
+        // untrimmed `title ?? ""` from OmniboxRanker.classify) so highlight
+        // String.Index offsets line up; fall back to host only when empty.
+        let title = item.title ?? ""
         return title.isEmpty ? SiteVisual.host(for: item.url) : title
     }
 

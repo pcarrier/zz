@@ -386,7 +386,12 @@ struct BrowserUtilityTests {
             entry("https://x.com/a?utm=longlonglongtracking", "A"),
             entry("https://x.com/a", "A"),
         ]
-        let out = suggest("x.com/a", history).filter { $0.kind == .history }
+        // Query the host (not "x.com/a"): a query that canonicalizes to one of
+        // the entries' keys would be shown once as the typed/direct row and have
+        // its history duplicate suppressed, hiding the tiebreak. "x.com" matches
+        // both history rows but canonicalizes to neither, so both survive and the
+        // shorter canonical URL must win on the length tiebreak.
+        let out = suggest("x.com", history).filter { $0.kind == .history }
         #expect(out.first?.url == "https://x.com/a")
     }
 

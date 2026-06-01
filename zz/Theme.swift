@@ -71,6 +71,34 @@ nonisolated private let faviconLogger = Logger(
     category: "Favicons"
 )
 
+// Orders atomic disk writes to the favicon map by a monotonic generation so a
+// stale, already-in-flight debounced write cannot land after a newer one (e.g.
+// a synchronous flushSave at backgrounding) -- mirrors the invariant the other
+// stores get from BrowserStore's PersistenceWriteOrderer. A dedicated instance
+// is sufficient because no other store writes the favicon map URL; the write
+// physically runs while the lock is held to keep the atomic rename and the
+// last-committed-generation bookkeeping consistent.
+nonisolated private final class FaviconMapWriteOrderer: Sendable {
+    static let shared = FaviconMapWriteOrderer()
+    private let lock = OSAllocatedUnfairLock(initialState: [URL: UInt64]())
+
+    // Drops the write if a newer generation has already been committed for `url`.
+    func write(_ data: Data, to url: URL, generation: UInt64) {
+        lock.withLock { committed in
+            if let last = committed[url], last >= generation { return }
+            committed[url] = generation
+            do {
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                try data.write(to: url, options: .atomic)
+            } catch {
+                faviconLogger.error("Favicon map save failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+}
+
 /// Pure helpers for the favicon cache: candidate fetch URLs, the on-disk
 /// filename for a host, decoding bytes to a platform image, and LRU eviction.
 /// Kept free of any actor/state so they are unit-testable and Sendable-safe.
@@ -170,16 +198,45 @@ final class FaviconStore {
     @ObservationIgnored
     private var saveTask: Task<Void, Never>?
 
+    /// Monotonic per-store generation so a stale, already-in-flight debounced
+    /// map write cannot overwrite a newer flushSave at backgrounding (matches
+    /// the invariant used by BrowserStore/HistoryStore/LayoutPresetStore).
+    @ObservationIgnored
+    private var saveGeneration: UInt64 = 0
+
     /// Serial tail for image-file IO. Each write/delete chains off the previous
     /// one so operations on the same deterministic filename run in enqueue order.
     @ObservationIgnored
     private var imageIOTail: Task<Void, Never> = Task {}
 
+    /// One persisted host->filename pair. Persisting an ordered array of these
+    /// (oldest first) preserves LRU recency across launches, which a bare
+    /// `[String: String]` map cannot since Dictionary key order is unspecified.
+    private struct Entry: Codable {
+        let host: String
+        let name: String
+    }
+
     init() {
-        if let data = try? Data(contentsOf: Self.mapFileURL),
-           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+        guard let data = try? Data(contentsOf: Self.mapFileURL) else { return }
+        if let entries = try? JSONDecoder().decode([Entry].self, from: data) {
+            order = entries.map(\.host)
+            fileNames = Dictionary(entries.map { ($0.host, $0.name) },
+                                   uniquingKeysWith: { _, last in last })
+        } else if let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            // Legacy map-only file: accept the arbitrary order once. Subsequent
+            // saves write the ordered `[Entry]` form.
             fileNames = decoded
             order = Array(decoded.keys)
+        }
+    }
+
+    /// Ordered snapshot for persistence, oldest first. Hosts present in `order`
+    /// that still have a filename are written; this is the authoritative LRU
+    /// sequence used on restore.
+    private func entriesForSave() -> [Entry] {
+        order.compactMap { host in
+            fileNames[host].map { Entry(host: host, name: $0) }
         }
     }
 
@@ -273,19 +330,42 @@ final class FaviconStore {
 
     private func scheduleSaveMap() {
         saveTask?.cancel()
-        let snapshot = fileNames
+        let snapshot = entriesForSave()
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled else { return }
+            // Assign the generation on the main actor so write ordering matches
+            // the order saves were requested; a later flushSave gets a higher
+            // generation and will win even if this off-main write lands after it.
+            saveGeneration += 1
+            let generation = saveGeneration
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            await Self.writeMapOffMain(data)
+            await Self.writeMapOffMain(data, generation: generation)
         }
     }
 
     func flushSave() {
         saveTask?.cancel()
-        guard let data = try? JSONEncoder().encode(fileNames) else { return }
-        Self.writeMap(data)
+        // Drain any enqueued image-byte writes before persisting the map so
+        // index.json cannot reference a filename whose bytes never landed
+        // (the imageIOTail chain is otherwise un-awaited and can be cut off by
+        // suspension). The chain only touches FaviconDiskIO (a separate actor)
+        // and never hops to MainActor, so blocking the main thread on it here
+        // cannot deadlock. Captured before computing the map so every file the
+        // snapshot references is committed first.
+        let pendingImageIO = imageIOTail
+        let drained = DispatchSemaphore(value: 0)
+        Task {
+            await pendingImageIO.value
+            drained.signal()
+        }
+        drained.wait()
+        // A higher generation than any pending scheduleSaveMap ensures an
+        // in-flight off-main write cannot overwrite us.
+        saveGeneration += 1
+        let generation = saveGeneration
+        guard let data = try? JSONEncoder().encode(entriesForSave()) else { return }
+        Self.writeMap(data, generation: generation)
     }
 
     // MARK: Off-main IO (Sendable-safe: only Data/String cross the boundary)
@@ -326,19 +406,12 @@ final class FaviconStore {
         }
     }
 
-    nonisolated private static func writeMapOffMain(_ data: Data) async {
-        writeMap(data)
+    nonisolated private static func writeMapOffMain(_ data: Data, generation: UInt64) async {
+        writeMap(data, generation: generation)
     }
 
-    nonisolated private static func writeMap(_ data: Data) {
-        do {
-            try FileManager.default.createDirectory(
-                at: mapFileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try data.write(to: mapFileURL, options: .atomic)
-        } catch {
-            faviconLogger.error("Favicon map save failed: \(error.localizedDescription, privacy: .public)")
-        }
+    nonisolated private static func writeMap(_ data: Data, generation: UInt64) {
+        FaviconMapWriteOrderer.shared.write(data, to: mapFileURL, generation: generation)
     }
 
     nonisolated private static var imageDir: URL {

@@ -10,6 +10,32 @@ nonisolated private let persistenceLogger = Logger(
     category: "Persistence"
 )
 
+// Orders atomic disk writes per file by a monotonic generation so a stale,
+// already-in-flight debounced write cannot land after a newer one (e.g. a
+// synchronous flushSave at backgrounding). The write physically runs while the
+// lock is held: that keeps the atomic rename and the last-committed-generation
+// bookkeeping consistent, and the per-file writes here are small + infrequent.
+nonisolated private final class PersistenceWriteOrderer: Sendable {
+    static let shared = PersistenceWriteOrderer()
+    private let lock = OSAllocatedUnfairLock(initialState: [URL: UInt64]())
+
+    // Drops the write if a newer generation has already been committed for `url`.
+    func write(_ data: Data, to url: URL, generation: UInt64) {
+        lock.withLock { committed in
+            if let last = committed[url], last >= generation { return }
+            committed[url] = generation
+            do {
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                try data.write(to: url, options: .atomic)
+            } catch {
+                persistenceLogger.error("save failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+}
+
 // MARK: - BSP tree (leaves carry a Tab id)
 
 enum BSPNode: Codable, Identifiable, Hashable {
@@ -399,6 +425,8 @@ final class BrowserStore {
 
     @ObservationIgnored
     private var saveTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var saveGeneration: UInt64 = 0
 
     init(windowID: WindowID, history: HistoryStore) {
         self.windowID = windowID
@@ -982,20 +1010,25 @@ final class BrowserStore {
     private func scheduleSave() {
         saveTask?.cancel()
         let url = Self.snapshotFile(for: windowID)
-        saveTask = Task {
+        saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, let self else { return }
             // Build the snapshot only after the debounce window elapses, so a
             // burst of notifyPersistenceChanged() calls (e.g. contentOffset KVO
             // firing at display-refresh rate during scrolling) coalesces into a
             // single main-actor snapshot build rather than one per tick.
             let snapshot = currentSnapshot()
+            // Assign the generation on the main actor so write ordering matches
+            // the order saves were requested; a later flushSave gets a higher
+            // generation and will win even if this off-main write lands after it.
+            saveGeneration += 1
+            let generation = saveGeneration
             // Encode on the main actor (WindowSnapshot's Codable conformance is
             // main-actor-isolated, and the encode is cheap + coalesced by the
             // debounce), then hand the bytes to a nonisolated writer so the
             // unbounded atomic disk write runs OFF the main actor.
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            await Self.writeDataOffMain(data, to: url)
+            await Self.writeDataOffMain(data, to: url, generation: generation)
         }
     }
 
@@ -1003,24 +1036,20 @@ final class BrowserStore {
         saveTask?.cancel()
         // Synchronous on purpose: flushSave runs at scenePhase background/terminate
         // and must finish before the process is suspended, so it cannot hand off to
-        // a task that may never get scheduled.
+        // a task that may never get scheduled. A higher generation than any pending
+        // scheduleSave ensures an in-flight off-main write cannot overwrite us.
+        saveGeneration += 1
+        let generation = saveGeneration
         guard let data = try? JSONEncoder().encode(currentSnapshot()) else { return }
-        Self.writeData(data, to: Self.snapshotFile(for: windowID))
+        Self.writeData(data, to: Self.snapshotFile(for: windowID), generation: generation)
     }
 
-    nonisolated private static func writeDataOffMain(_ data: Data, to url: URL) async {
-        writeData(data, to: url)
+    nonisolated private static func writeDataOffMain(_ data: Data, to url: URL, generation: UInt64) async {
+        writeData(data, to: url, generation: generation)
     }
 
-    nonisolated private static func writeData(_ data: Data, to url: URL) {
-        do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try data.write(to: url, options: .atomic)
-        } catch {
-            persistenceLogger.error("BrowserStore save failed: \(error.localizedDescription, privacy: .public)")
-        }
+    nonisolated private static func writeData(_ data: Data, to url: URL, generation: UInt64) {
+        PersistenceWriteOrderer.shared.write(data, to: url, generation: generation)
     }
 
     private static func snapshotFile(for windowID: WindowID) -> URL {
@@ -1028,6 +1057,19 @@ final class BrowserStore {
             .appending(path: "zz/windows", directoryHint: .isDirectory)
             .appending(path: windowID.id.uuidString, directoryHint: .isDirectory)
             .appending(path: "state.json")
+    }
+
+    /// Removes this window's entire persisted-state directory. Call this ONLY on
+    /// an intentional user-initiated window close (wired into the close action
+    /// before dismissWindow), never on app backgrounding/termination: SwiftUI
+    /// mints a fresh WindowID for every new window, so an orphaned snapshot is
+    /// never re-associated and would otherwise leak on disk without bound.
+    func deleteSnapshot() {
+        // Cancel any in-flight debounced save so it cannot recreate the file
+        // after we delete it.
+        saveTask?.cancel()
+        let dir = Self.snapshotFile(for: windowID).deletingLastPathComponent()
+        try? FileManager.default.removeItem(at: dir)
     }
 
     // MARK: Layout presets
@@ -1178,6 +1220,8 @@ final class LayoutPresetStore {
 
     @ObservationIgnored
     private var saveTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var saveGeneration: UInt64 = 0
 
     init() {
         if let data = try? Data(contentsOf: Self.fileURL),
@@ -1204,30 +1248,29 @@ final class LayoutPresetStore {
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
+            saveGeneration += 1
+            let generation = saveGeneration
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            await Self.writeDataOffMain(data)
+            await Self.writeDataOffMain(data, generation: generation)
         }
     }
 
     func flushSave() {
         saveTask?.cancel()
+        // Higher generation than any pending scheduleSave so an in-flight off-main
+        // write cannot overwrite this synchronous flush.
+        saveGeneration += 1
+        let generation = saveGeneration
         guard let data = try? JSONEncoder().encode(presets) else { return }
-        Self.writeData(data)
+        Self.writeData(data, generation: generation)
     }
 
-    nonisolated private static func writeDataOffMain(_ data: Data) async {
-        writeData(data)
+    nonisolated private static func writeDataOffMain(_ data: Data, generation: UInt64) async {
+        writeData(data, generation: generation)
     }
 
-    nonisolated private static func writeData(_ data: Data) {
-        do {
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try data.write(to: fileURL, options: .atomic)
-        } catch {
-            persistenceLogger.error("LayoutPresetStore save failed: \(error.localizedDescription, privacy: .public)")
-        }
+    nonisolated private static func writeData(_ data: Data, generation: UInt64) {
+        PersistenceWriteOrderer.shared.write(data, to: fileURL, generation: generation)
     }
 
     nonisolated private static var fileURL: URL {
@@ -1658,7 +1701,16 @@ nonisolated enum OmniboxRanker {
                                           length: Int) -> Range<String.Index>? {
         guard length > 0, host.count >= length else { return nil }
         let prefix = String(host.prefix(length))
-        return url.range(of: prefix, options: [.caseInsensitive])
+        // Anchor at the host's position so the prefix lands on the real host
+        // and not an earlier coincidental occurrence (e.g. "http" inside the
+        // "https://" scheme of "https://httpstat.us").
+        let from: Int
+        if let hr = url.range(of: host, options: [.caseInsensitive]) {
+            from = url.distance(from: url.startIndex, to: hr.lowerBound)
+        } else {
+            from = 0
+        }
+        return rangeOfSubstring(prefix.lowercased(), in: url, from: from)
     }
 
     // MARK: Scoring
@@ -1750,17 +1802,19 @@ enum OmniboxSuggestions {
             let visitCount = coincide?.visitCount ?? 1
             let lastVisited = coincide?.lastVisited ?? now
 
+            // Trim once so range offsets and the displayed string share an index space.
+            let trimmedTitle = tab.title?.trimmingCharacters(in: .whitespacesAndNewlines)
             var titleRanges: [Range<String.Index>] = []
             var urlRanges: [Range<String.Index>] = []
-            if let cls = OmniboxRanker.classify(query: norm, host: host, url: tab.url, title: tab.title) {
+            if let cls = OmniboxRanker.classify(query: norm, host: host, url: tab.url, title: trimmedTitle) {
                 titleRanges = cls.titleRanges
                 urlRanges = cls.urlRanges
-            } else if titleMatches, let t = tab.title,
+            } else if titleMatches, let t = trimmedTitle,
                       let r = t.range(of: norm.q, options: [.caseInsensitive]) {
                 titleRanges = [r]
             }
 
-            let item = OmniboxItem(id: key, url: tab.url, title: tab.title,
+            let item = OmniboxItem(id: key, url: tab.url, title: trimmedTitle,
                                    kind: .openTab, tabID: tab.tabID,
                                    titleRanges: titleRanges, urlRanges: urlRanges)
             let canonicalLength = URLCanonicalizer.key(tab.url).count
@@ -1777,8 +1831,10 @@ enum OmniboxSuggestions {
         // 3. History -> gated-tier candidates.
         for entry in history {
             let host = URLCanonicalizer.host(entry.url)
+            // Trim once so range offsets and the displayed string share an index space.
+            let trimmedTitle = entry.title?.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let cls = OmniboxRanker.classify(query: norm, host: host,
-                                                   url: entry.url, title: entry.title) else {
+                                                   url: entry.url, title: trimmedTitle) else {
                 continue
             }
             let key = entry.canonicalKey
@@ -1791,7 +1847,7 @@ enum OmniboxSuggestions {
                 tier: cls.tier, visitCount: entry.visitCount,
                 lastVisited: entry.lastVisited, now: now, matchStart: cls.matchStart,
                 canonicalLength: canonicalLength, includeEarliness: includeEarliness)
-            let item = OmniboxItem(id: key, url: entry.url, title: entry.title,
+            let item = OmniboxItem(id: key, url: entry.url, title: trimmedTitle,
                                    kind: .history,
                                    titleRanges: cls.titleRanges, urlRanges: cls.urlRanges)
             scored.append(Scored(item: item, canonicalKey: key, tier: cls.tier,
@@ -1814,20 +1870,27 @@ enum OmniboxSuggestions {
         // 5. Sort by deterministic total order.
         ranked.sort(by: isHigher)
 
-        // 6. directEntry suppression: drop synthetic direct only if top real
-        // candidate is a Tier 4/5 match with the same canonicalKey.
+        // 6. directEntry suppression: drop synthetic direct when the top real
+        // candidate has the same canonicalKey and is either a Tier 4/5 history
+        // match or an open tab. Surfacing the open-tab row lets Return focus the
+        // existing tab instead of reloading the URL in the current pane.
         var keepDirect = direct != nil
         if let directKey, let top = ranked.first,
            top.canonicalKey == directKey,
-           (top.tier == OmniboxRanker.tierHostPrefix || top.tier == OmniboxRanker.tierPrefix) {
+           (top.tier == OmniboxRanker.tierHostPrefix
+            || top.tier == OmniboxRanker.tierPrefix
+            || top.tier == OmniboxRanker.tierOpenTab) {
             keepDirect = false
         }
 
         var result: [OmniboxItem] = []
         if keepDirect, let direct { result.append(direct) }
         for cand in ranked {
-            if keepDirect == false, let directKey, cand.canonicalKey == directKey,
-               result.contains(where: { $0.id == cand.item.id }) { continue }
+            // When a synthetic direct row is shown it already represents its
+            // canonicalKey; skip any ranked candidate sharing that key so the
+            // same URL is never rendered twice (regardless of the candidate's
+            // tier or differing item id, e.g. a trailing-slash variant).
+            if keepDirect, let directKey, cand.canonicalKey == directKey { continue }
             result.append(cand.item)
             if result.count >= limit { break }
         }
@@ -1891,8 +1954,10 @@ enum OmniboxSuggestions {
         if let m = KeywordBangs.match(trimmed, engines: keywordEngines), !m.query.isEmpty,
            let expanded = KeywordBangs.expand(trimmed, engines: keywordEngines),
            expanded == resolved {
+            let engineTitle = m.engine.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let label = engineTitle.isEmpty ? m.engine.keyword : engineTitle
             return OmniboxItem(id: url, url: url,
-                               title: "Search \(m.engine.title)", kind: .search)
+                               title: "Search \(label)", kind: .search)
         }
         let isSearch = directIsSearch(for: trimmed, resolved: resolved, searchTemplate: searchTemplate)
         return OmniboxItem(
@@ -1921,6 +1986,8 @@ final class HistoryStore {
 
     @ObservationIgnored
     private var saveTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var saveGeneration: UInt64 = 0
     private let limit = 2000
 
     init() {
@@ -1989,31 +2056,30 @@ final class HistoryStore {
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
+            saveGeneration += 1
+            let generation = saveGeneration
             // Encode on main (debounce coalesces it), write off main.
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            await Self.writeDataOffMain(data)
+            await Self.writeDataOffMain(data, generation: generation)
         }
     }
 
     func flushSave() {
         saveTask?.cancel()
+        // Higher generation than any pending scheduleSave so an in-flight off-main
+        // write cannot overwrite this synchronous flush.
+        saveGeneration += 1
+        let generation = saveGeneration
         guard let data = try? JSONEncoder().encode(entries) else { return }
-        Self.writeData(data)
+        Self.writeData(data, generation: generation)
     }
 
-    nonisolated private static func writeDataOffMain(_ data: Data) async {
-        writeData(data)
+    nonisolated private static func writeDataOffMain(_ data: Data, generation: UInt64) async {
+        writeData(data, generation: generation)
     }
 
-    nonisolated private static func writeData(_ data: Data) {
-        do {
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try data.write(to: fileURL, options: .atomic)
-        } catch {
-            persistenceLogger.error("HistoryStore save failed: \(error.localizedDescription, privacy: .public)")
-        }
+    nonisolated private static func writeData(_ data: Data, generation: UInt64) {
+        PersistenceWriteOrderer.shared.write(data, to: fileURL, generation: generation)
     }
 
     nonisolated private static var fileURL: URL {
@@ -2119,7 +2185,16 @@ nonisolated enum URLNormalizer {
     private static func isHostPort(_ s: String) -> Bool {
         guard let range = s.range(of: #"^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]+(/.*)?$"#,
                                   options: .regularExpression) else { return false }
-        return range == s.startIndex..<s.endIndex
+        guard range == s.startIndex..<s.endIndex else { return false }
+        // The authority before ":" is also a valid scheme. A purely numeric body
+        // (tel:5551234, sms:1234, mailto:1234) matches the regex but is a custom
+        // URI, not a host:port. Reject when the part before ":" is a known
+        // non-web scheme so the caller hands it off rather than navigating to a
+        // corrupt https://scheme:number URL.
+        let authority = s.prefix(while: { $0 != ":" }).lowercased()
+        let nonWebSchemes: Set<String> = ["tel", "sms", "mailto", "ftp", "data",
+                                          "javascript", "file", "about"]
+        return !nonWebSchemes.contains(authority)
     }
 }
 

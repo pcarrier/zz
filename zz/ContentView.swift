@@ -24,6 +24,7 @@ private struct BrowserScene: View {
     @State private var historyPresented: Bool = false
     @State private var saveLayoutPromptPresented: Bool = false
     @State private var saveLayoutName: String = ""
+    @State private var matches: [OmniboxItem] = []
     @FocusState private var urlFocused: Bool
 
     @Environment(HistoryStore.self) private var history
@@ -39,7 +40,11 @@ private struct BrowserScene: View {
         _store = State(initialValue: BrowserStore(windowID: windowID, history: history))
     }
 
-    private var matches: [OmniboxItem] {
+    // Ranking the full history (up to ~2000 entries) per read is expensive, so
+    // the result is cached in `matches` and only recomputed when an input that
+    // affects it changes (draft / focus / open tabs / history). body, BottomBar
+    // and the stale-selection check all read the cached value.
+    private func computedMatches() -> [OmniboxItem] {
         guard urlFocused else { return [] }
         // Fetch up to 100; the suggestion list caps the visible rows and
         // makes the rest scrollable.
@@ -49,6 +54,34 @@ private struct BrowserScene: View {
             now: .now,
             limit: 100
         )
+    }
+
+    // A stable identity for every input that affects `matches`: focus, the typed
+    // draft, the open-tab suggestions (a background tab finishing a load shifts
+    // its suggestion) and the history size. Driving a single onChange off this
+    // keeps the body's modifier chain short enough to type-check.
+    private var matchesInputKey: [String] {
+        var key = ["\(urlFocused)", draft, "\(history.entries.count)"]
+        for s in store.openTabSuggestions() {
+            key.append("\(s.tabID)|\(s.url)|\(s.title ?? "")")
+        }
+        return key
+    }
+
+    // Recompute the cached suggestions and, if the item under the highlighted
+    // index changed (reorder/content change at the same count), clear the stale
+    // selection so Return doesn't commit the wrong suggestion. Mutating tracked
+    // @State during body evaluation is undefined (gotcha #5), so callers defer
+    // this to a Task.
+    private func refreshMatches() {
+        let oldIDs = matches.map(\.id)
+        let new = computedMatches()
+        let newIDs = new.map(\.id)
+        if oldIDs != newIDs { matches = new }
+        if let idx = selectedSuggestionIndex,
+           idx >= newIDs.count || idx >= oldIDs.count || oldIDs[idx] != newIDs[idx] {
+            selectedSuggestionIndex = nil
+        }
     }
 
     var body: some View {
@@ -88,6 +121,22 @@ private struct BrowserScene: View {
                 onForward: {
                     guard store.focusedTab?.canGoForward == true else { return false }
                     store.forwardFocused()
+                    return true
+                }
+            )
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+
+            // Plain Cmd-W closes the focused tile. The standard WindowGroup
+            // "Close Window" menu item is also bound to Cmd-W and would
+            // otherwise win, closing the whole window; a window-scoped local
+            // key monitor runs ahead of main-menu key-equivalent dispatch so
+            // the tile close wins. Cmd-Shift-W is left to fall through to the
+            // standard close.
+            CloseTileKeyLayer(
+                onCloseTile: {
+                    guard let id = store.focusedTabID else { return false }
+                    store.close(id)
                     return true
                 }
             )
@@ -136,10 +185,14 @@ private struct BrowserScene: View {
                 selectedSuggestionIndex = nil
             }
         }
-        .onChange(of: matches.count) { _, count in
-            if let idx = selectedSuggestionIndex, idx >= count {
-                selectedSuggestionIndex = nil
-            }
+        // Recompute the cached suggestions whenever any ranking input changes.
+        // matches can reorder/change content while keeping the same count (e.g. a
+        // background tab finishes loading and its open-tab suggestion shifts);
+        // refreshMatches clears the highlighted index if the item under it
+        // changed so Return doesn't commit the wrong suggestion. Deferred to a
+        // Task because mutating tracked @State during body eval is undefined.
+        .onChange(of: matchesInputKey) { _, _ in
+            Task { @MainActor in refreshMatches() }
         }
         .onChange(of: store.parked.count) { oldCount, newCount in
             if usesCompactLayout && newCount > oldCount {
@@ -288,7 +341,8 @@ private struct ShortcutLayer: View {
             shortcut("Close Window",     "w", modifiers: [.command, .shift], action: closeWindow)
 
             shortcut("Park Tile",        "p", modifiers: [.command, .option], action: store.parkFocused)
-            shortcut("Close Tile",       "w", action: closeFocused)
+            // Close Tile (Cmd-W) is handled by CloseTileKeyLayer's local key
+            // monitor so it wins over the standard "Close Window" menu item.
             shortcut("Focus URL Bar",    "l", action: store.focusURLBar)
 
             shortcut("Reload",           "r", action: store.reloadFocused)
@@ -362,11 +416,6 @@ private struct ShortcutLayer: View {
     private func splitSelection(_ axis: BSPNode.Axis) {
         store.splitSelection(axis: axis)
     }
-
-    private func closeFocused() {
-        guard let id = store.focusedTabID else { return }
-        store.close(id)
-    }
 }
 
 #if os(macOS)
@@ -439,6 +488,54 @@ private final class HistoryMouseButtonView: NSView {
         default:
             return false
         }
+    }
+}
+
+private struct CloseTileKeyLayer: NSViewRepresentable {
+    var onCloseTile: () -> Bool
+
+    func makeNSView(context: Context) -> CloseTileKeyView {
+        let view = CloseTileKeyView()
+        view.onCloseTile = onCloseTile
+        return view
+    }
+
+    func updateNSView(_ view: CloseTileKeyView, context: Context) {
+        view.onCloseTile = onCloseTile
+    }
+}
+
+private final class CloseTileKeyView: NSView {
+    var onCloseTile: (() -> Bool)?
+
+    private var monitor: Any?
+
+    deinit {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installMonitorIfNeeded()
+    }
+
+    private func installMonitorIfNeeded() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            self?.handle(event) ?? event
+        }
+    }
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        guard event.window === window else { return event }
+        // Plain Cmd-W only; let Cmd-Shift-W (Close Window) fall through.
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags == .command,
+              event.charactersIgnoringModifiers?.lowercased() == "w" else { return event }
+        guard onCloseTile?() ?? false else { return event }
+        return nil
     }
 }
 #endif
