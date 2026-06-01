@@ -54,7 +54,8 @@ nonisolated enum SiteVisual {
 }
 
 enum PaneSelectionVisual {
-    static let strokeWidth: CGFloat = 2.0
+    static let strokeWidth: CGFloat = 1.0
+    static let reservedInset: CGFloat = strokeWidth
 }
 
 // MARK: - Favicons

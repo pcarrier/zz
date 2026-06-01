@@ -55,6 +55,7 @@ struct TileView: View {
                               layoutRevision: store.paneLayoutRevision(for: tabID))
             }
         }
+        .padding(PaneSelectionVisual.reservedInset)
         .background(Color.canvas)
         .clipped()
         .overlay(alignment: .top) {
@@ -137,8 +138,8 @@ private struct MediaIndicator: View {
 private struct ActivePaneOutline: View {
     var body: some View {
         Rectangle()
-            .stroke(Color.textSelection,
-                    lineWidth: PaneSelectionVisual.strokeWidth)
+            .strokeBorder(Color.textSelection,
+                          lineWidth: PaneSelectionVisual.strokeWidth)
     }
 }
 
