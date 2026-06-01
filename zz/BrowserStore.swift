@@ -413,7 +413,7 @@ final class BrowserStore {
             self.tabs = loadedTabs
             var seenLeafIDs = Set<UUID>()
             self.root = snap.root.deduplicatingLeafIDs(seen: &seenLeafIDs)
-            self.sidebarWidth = snap.sidebarWidth
+            self.sidebarWidth = snap.sidebarWidth.clamped(to: 0...520)
             for tabID in root.tabIDs() where tabs[tabID] == nil {
                 tabs[tabID] = Tab(id: tabID, history: history)
             }
@@ -598,6 +598,7 @@ final class BrowserStore {
         root = root.splitting(tabID, axis: axis, newTabID: newID, side: side)
         focusedTabID = newID
         selectedGroupID = nil
+        if zoomedTabID != nil { zoomedTabID = nil }
         if loadURL == nil { focusURLBarTrigger &+= 1 }
         markPaneLayoutsChanged([tabID])
         scheduleSave()
@@ -617,6 +618,7 @@ final class BrowserStore {
         root = root.splittingGroup(splitID, axis: axis, newTabID: newID, side: side)
         focusedTabID = newID
         selectedGroupID = nil
+        if zoomedTabID != nil { zoomedTabID = nil }
         if loadURL == nil { focusURLBarTrigger &+= 1 }
         markPaneLayoutsChanged(resizedTabIDs)
         scheduleSave()
@@ -734,9 +736,12 @@ final class BrowserStore {
 
     func beginRatioDrag(_ splitID: UUID) {
         selectGroup(splitID)
-        if dragInitialRatios[splitID] == nil {
-            dragInitialRatios[splitID] = root.ratio(forSplit: splitID)
-        }
+        // Re-capture the baseline at the start of every gesture. The gesture's
+        // translation is cumulative-from-start, so each new drag needs the
+        // divider's current ratio as its baseline. Capturing only when nil
+        // would reuse a stale ratio if a prior drag was cancelled without
+        // endRatioDrag firing.
+        dragInitialRatios[splitID] = root.ratio(forSplit: splitID)
     }
 
     func updateRatioDrag(_ splitID: UUID, usable: CGFloat, translation: CGFloat) {
@@ -756,6 +761,7 @@ final class BrowserStore {
               let next = root.neighbor(of: current, direction: direction) else { return }
         selectedGroupID = nil
         focusedTabID = next
+        if zoomedTabID != nil { zoomedTabID = nil }
         scheduleSave()
     }
 
@@ -1165,14 +1171,34 @@ enum URLNormalizer {
                         searchTemplate: String = SearchPreferences.activeTemplate) -> URL? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if let url = URL(string: trimmed), let scheme = url.scheme,
-           scheme == "http" || scheme == "https" || scheme == "about" || scheme == "file" {
-            return url
+        // Foundation does NOT lowercase URL.scheme, so compare case-insensitively.
+        if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
+            if scheme == "http" || scheme == "https" || scheme == "about" || scheme == "file" {
+                return url
+            }
+            // The input carries an explicit, non-web scheme (mailto:, tel:, ftp:,
+            // sms:, data:, javascript:, localhost:8080's bogus "localhost"…).
+            // Never prepend https:// to it — that produces corrupt URLs. Detect a
+            // host:port authority and treat it as web; otherwise reject so the
+            // caller can hand off / search rather than navigate to garbage.
+            if isHostPort(trimmed) {
+                return URL(string: "https://" + trimmed)
+            }
+            return nil
         }
         if trimmed.contains(" ") || !trimmed.contains(".") {
             return SearchPreferences.searchURL(for: trimmed, template: searchTemplate)
         }
         return URL(string: "https://" + trimmed)
+    }
+
+    /// Matches a bare "host:port" (optionally with a "/path"), e.g. "localhost:8080",
+    /// "myhost:3000/path". These have no dot so the dot/space heuristic misroutes
+    /// them to search, and URL() parses them with a bogus scheme equal to the host.
+    private static func isHostPort(_ s: String) -> Bool {
+        guard let range = s.range(of: #"^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]+(/.*)?$"#,
+                                  options: .regularExpression) else { return false }
+        return range == s.startIndex..<s.endIndex
     }
 }
 

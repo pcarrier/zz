@@ -210,6 +210,11 @@ extension _Representable {
         }
 
         private func detachIfOwned(_ webView: WKWebView) {
+            if hostedWebView === webView {
+                fullscreenObservation?.invalidate()
+                fullscreenObservation = nil
+                hostedWebView = nil
+            }
             guard webView.fullscreenState == .notInFullscreen,
                   webView.superview === self else { return }
             webView.removeFromSuperview()
@@ -429,6 +434,11 @@ extension _Representable {
         }
 
         private func detachIfOwned(_ webView: WKWebView) {
+            if hostedWebView === webView {
+                fullscreenObservation?.invalidate()
+                fullscreenObservation = nil
+                hostedWebView = nil
+            }
             guard webView.fullscreenState == .notInFullscreen,
                   webView.superview === self else { return }
             webView.removeFromSuperview()

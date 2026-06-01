@@ -263,18 +263,49 @@ private struct TileDropDelegate: DropDelegate {
 
     private func loadParkedTab(from info: DropInfo, zone: DropZone) -> Bool {
         guard let provider = info.itemProviders(for: Self.tabTypes).first else { return false }
+        // Capture URL providers synchronously: DropInfo is only valid during this
+        // callback, but the NSItemProviders it returns can be retained for the
+        // async decode below so we can fall back to a URL load if no parked tab
+        // id can be extracted.
+        let urlProviders = Self.urlTypes.compactMap { info.itemProviders(for: [$0]).first }
         provider.loadDataRepresentation(forTypeIdentifier: UTType.json.identifier) { data, _ in
-            guard let data else { return }
-            if let ref = try? JSONDecoder().decode(TabRef.self, from: data) {
-                apply(.parkedTab(ref.id), zone: zone)
-                return
+            if let data {
+                if let ref = try? JSONDecoder().decode(TabRef.self, from: data) {
+                    apply(.parkedTab(ref.id), zone: zone)
+                    return
+                }
+                if let string = String(data: data, encoding: .utf8),
+                   let id = UUID(uuidString: string.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    apply(.parkedTab(id), zone: zone)
+                    return
+                }
             }
-            if let string = String(data: data, encoding: .utf8),
-               let id = UUID(uuidString: string.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                apply(.parkedTab(id), zone: zone)
-            }
+            loadURL(fromProviders: urlProviders, zone: zone)
         }
         return true
+    }
+
+    private func loadURL(fromProviders providers: [NSItemProvider], zone: DropZone) {
+        if let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(UTType.url.identifier)
+        }) {
+            if provider.canLoadObject(ofClass: URL.self) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    apply(.url(url.absoluteString), zone: zone)
+                }
+                return
+            }
+            _ = loadText(from: provider, typeIdentifier: UTType.url.identifier, zone: zone)
+            return
+        }
+
+        for type in Self.urlTypes where type != UTType.url.identifier {
+            if let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(type) }) {
+                _ = loadText(from: provider, typeIdentifier: type, zone: zone)
+                return
+            }
+        }
     }
 
     private func loadText(from provider: NSItemProvider,

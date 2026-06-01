@@ -112,6 +112,19 @@ final class Tab {
     @ObservationIgnored
     private var lastScrollOffset: CGPoint = .zero
 
+    // True while a navigation is in flight (or the WebContent process is being
+    // recovered). WebKit resets contentOffset to zero during these transitions,
+    // so zero offsets are ignored only while this is set -- a genuine user
+    // scroll back to the top while the page is settled still updates the offset.
+    @ObservationIgnored
+    private var isNavigationInFlight: Bool = false
+
+    // True while performing the initial programmatic load of a restored tab.
+    // Suppresses history recording so session restore does not reorder/re-stamp
+    // the history LRU. Cleared after the first didFinish.
+    @ObservationIgnored
+    private var isRestoring: Bool = false
+
     @ObservationIgnored
     private var httpAuthCredentials: [HTTPAuthKey: URLCredential] = [:]
 
@@ -186,7 +199,14 @@ final class Tab {
         uiDelegate.owner = self
         wire()
         if !url.isEmpty, let target = URLNormalizer.resolve(url) {
-            if scrollOffset != .zero { pendingScrollRestore = scrollOffset }
+            if scrollOffset != .zero {
+                pendingScrollRestore = scrollOffset
+                lastScrollOffset = scrollOffset
+            }
+            // This initial load originates from session restore, not user
+            // navigation: suppress history recording until the first didFinish.
+            isRestoring = true
+            isNavigationInFlight = true
             webView.load(URLRequest(url: target))
         }
     }
@@ -270,6 +290,10 @@ final class Tab {
         }
         guard let target = URLNormalizer.resolve(trimmed) else { return }
         pendingScrollRestore = nil
+        isNavigationInFlight = true
+        // An explicit user load is genuine navigation: stop suppressing history
+        // even if the restore's initial load has not finished yet.
+        isRestoring = false
         currentURL = target.absoluteString
         notifyPersistenceChanged()
         webView.load(URLRequest(url: target))
@@ -284,6 +308,8 @@ final class Tab {
     }
 
     func didFinishNavigation() {
+        isNavigationInFlight = false
+        isRestoring = false
         guard let pending = pendingScrollRestore else { return }
         pendingScrollRestore = nil
         #if !os(macOS)
@@ -304,6 +330,7 @@ final class Tab {
             pendingScrollRestore = lastScrollOffset
         }
         #endif
+        isNavigationInFlight = true
         webView.reload()
     }
 
@@ -527,7 +554,7 @@ final class Tab {
                 Task { @MainActor [weak self] in
                     guard let self, let urlString, !urlString.isEmpty else { return }
                     self.currentURL = urlString
-                    if urlString != "about:blank" {
+                    if urlString != "about:blank", !self.isRestoring {
                         self.history?.record(url: urlString, title: self.title)
                     }
                     self.notifyPersistenceChanged()
@@ -538,7 +565,7 @@ final class Tab {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.title = t
-                    if !self.currentURL.isEmpty, self.currentURL != "about:blank" {
+                    if !self.currentURL.isEmpty, self.currentURL != "about:blank", !self.isRestoring {
                         self.history?.record(url: self.currentURL, title: t)
                     }
                     self.notifyPersistenceChanged()
@@ -566,9 +593,13 @@ final class Tab {
             webView.scrollView.observe(\.contentOffset, options: [.new]) { [weak self] sv, _ in
                 let offset = sv.contentOffset
                 MainActor.assumeIsolated {
-                    // Keep the pre-termination offset when WebContent resets to zero.
-                    guard offset != .zero else { return }
-                    self?.lastScrollOffset = offset
+                    guard let self else { return }
+                    // WebKit resets contentOffset to zero while a navigation or
+                    // process recovery is in flight; ignore those spurious zeros
+                    // so we keep the pre-transition offset. Once the page has
+                    // settled, a genuine user scroll back to (0,0) is recorded.
+                    if offset == .zero, self.isNavigationInFlight { return }
+                    self.lastScrollOffset = offset
                 }
             }
         )
@@ -852,10 +883,62 @@ private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
         NSURLAuthenticationMethodNegotiate,
     ]
 
+    // Downloads in progress, retained for the lifetime of their transfer. The
+    // delegate keeps a strong reference to each WKDownloadDelegate so it stays
+    // alive until the download completes or fails.
+    private var downloadDelegates: [ObjectIdentifier: DownloadDelegate] = [:]
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor [weak owner] in
             owner?.didFinishNavigation()
         }
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+    ) {
+        // Treat a response WebKit cannot render inline -- or one the server
+        // explicitly marks as an attachment -- as a download. Without this the
+        // load is silently cancelled and the file is dropped.
+        if !navigationResponse.canShowMIMEType || isAttachment(navigationResponse.response) {
+            decisionHandler(.download)
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    private func isAttachment(_ response: URLResponse) -> Bool {
+        guard let http = response as? HTTPURLResponse,
+              let disposition = http.value(forHTTPHeaderField: "Content-Disposition") else {
+            return false
+        }
+        return disposition.range(of: "attachment", options: .caseInsensitive) != nil
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        navigationAction: WKNavigationAction,
+        didBecome download: WKDownload
+    ) {
+        attach(download)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        navigationResponse: WKNavigationResponse,
+        didBecome download: WKDownload
+    ) {
+        attach(download)
+    }
+
+    private func attach(_ download: WKDownload) {
+        let delegate = DownloadDelegate { [weak self] finished in
+            self?.downloadDelegates.removeValue(forKey: ObjectIdentifier(finished))
+        }
+        downloadDelegates[ObjectIdentifier(download)] = delegate
+        download.delegate = delegate
     }
 
     func webView(
@@ -886,6 +969,81 @@ private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
             owner?.recoverFromTermination()
         }
     }
+}
+
+/// Picks a destination for a WKDownload and reports completion back to its owner.
+private final class DownloadDelegate: NSObject, WKDownloadDelegate {
+    private let onFinish: (WKDownload) -> Void
+
+    init(onFinish: @escaping (WKDownload) -> Void) {
+        self.onFinish = onFinish
+    }
+
+    func download(
+        _ download: WKDownload,
+        decideDestinationUsing response: URLResponse,
+        suggestedFilename: String,
+        completionHandler: @escaping (URL?) -> Void
+    ) {
+        let filename = sanitized(suggestedFilename)
+        #if os(macOS)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = filename
+        panel.canCreateDirectories = true
+        panel.begin { result in
+            guard result == .OK, let url = panel.url else {
+                completionHandler(nil)
+                return
+            }
+            // The save panel guarantees the user chose this path; remove any
+            // stale file there since WKDownload refuses an existing destination.
+            try? FileManager.default.removeItem(at: url)
+            completionHandler(url)
+        }
+        #else
+        guard let directory = try? FileManager.default.url(
+            for: .downloadsDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ) else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(uniqueDestination(in: directory, filename: filename))
+        #endif
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        onFinish(download)
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        onFinish(download)
+    }
+
+    private func sanitized(_ suggestedFilename: String) -> String {
+        let name = suggestedFilename
+            .components(separatedBy: CharacterSet(charactersIn: "/\\")).joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "download" : name
+    }
+
+    #if !os(macOS)
+    private func uniqueDestination(in directory: URL, filename: String) -> URL {
+        let candidate = directory.appendingPathComponent(filename)
+        guard FileManager.default.fileExists(atPath: candidate.path) else { return candidate }
+        let base = (filename as NSString).deletingPathExtension
+        let ext = (filename as NSString).pathExtension
+        var index = 1
+        while true {
+            let suffix = ext.isEmpty ? "\(base) \(index)" : "\(base) \(index).\(ext)"
+            let next = directory.appendingPathComponent(suffix)
+            if !FileManager.default.fileExists(atPath: next.path) { return next }
+            index += 1
+        }
+    }
+    #endif
 }
 
 /// Routes new-window requests into app-owned panes instead of letting WebKit spawn windows.

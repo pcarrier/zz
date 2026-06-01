@@ -206,7 +206,7 @@ private struct SidebarReorderDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        let destination = candidateInsertionIndex(at: info.location)
+        let dropLocation = info.location
         insertionIndex = nil
 
         guard let provider = info.itemProviders(for: [UTType.json.identifier]).first else {
@@ -217,6 +217,9 @@ private struct SidebarReorderDropDelegate: DropDelegate {
             guard let data, let ref = Self.tabRef(from: data) else { return }
             Task { @MainActor in
                 guard let source = store.parked.firstIndex(of: ref.id) else { return }
+                // Resolve the destination against the live parked list at drop
+                // time, since it may have changed since the delegate was built.
+                let destination = candidateInsertionIndex(at: dropLocation, in: store.parked)
                 let clampedDestination = destination.clamped(to: 0...store.parked.count)
                 store.reorderParked(from: IndexSet(integer: source),
                                     to: clampedDestination)
@@ -229,12 +232,14 @@ private struct SidebarReorderDropDelegate: DropDelegate {
         insertionIndex = candidateInsertionIndex(at: info.location)
     }
 
-    private func candidateInsertionIndex(at location: CGPoint) -> Int {
-        for (idx, tabID) in parkedIDs.enumerated() {
+    private func candidateInsertionIndex(at location: CGPoint,
+                                         in ids: [UUID]? = nil) -> Int {
+        let ids = ids ?? parkedIDs
+        for (idx, tabID) in ids.enumerated() {
             guard let frame = rowFrames[tabID] else { continue }
             if location.y < frame.midY { return idx }
         }
-        return parkedIDs.count
+        return ids.count
     }
 
     private static func tabRef(from data: Data) -> TabRef? {
