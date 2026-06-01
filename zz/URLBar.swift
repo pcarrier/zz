@@ -173,9 +173,7 @@ private struct SuggestionRow: View {
             selectOnce()
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: iconName)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
+                leadingIcon
                     .frame(width: 16)
                 VStack(alignment: .leading, spacing: 3) {
                     highlighted(displayTitle, ranges: titleRanges, base: .primary)
@@ -259,12 +257,19 @@ private struct SuggestionRow: View {
         return title.isEmpty ? SiteVisual.host(for: item.url) : title
     }
 
-    private var iconName: String {
+    /// History/open-tab rows show the site favicon (with a globe fallback);
+    /// search/open direct rows keep their SF Symbols.
+    @ViewBuilder
+    private var leadingIcon: some View {
         switch item.kind {
-        case .search:  return "magnifyingglass"
-        case .open:    return "arrow.up.forward.app"
-        case .openTab: return "rectangle.on.rectangle"
-        case .history: return "clock.arrow.circlepath"
+        case .history, .openTab:
+            FaviconView(url: item.url, size: 16,
+                        fallbackSymbol: item.kind == .openTab
+                            ? "rectangle.on.rectangle" : "clock.arrow.circlepath")
+        case .search, .open:
+            Image(systemName: item.kind == .search ? "magnifyingglass" : "arrow.up.forward.app")
+                .font(.system(size: 12))
+                .foregroundStyle(.tertiary)
         }
     }
 }

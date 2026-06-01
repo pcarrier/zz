@@ -88,6 +88,27 @@ private enum HTTPAuthCredentialStore {
     }
 }
 
+/// Pure page-zoom level math: defaults, clamping, and stepping. Kept free of any
+/// WebKit/UI state so the clamp/step behavior is unit-testable in isolation.
+nonisolated enum PageZoom {
+    static let defaultLevel: Double = 1.0
+    static let minLevel: Double = 0.5
+    static let maxLevel: Double = 3.0
+    static let step: Double = 0.1
+
+    static func clamp(_ level: Double) -> Double {
+        level.clamped(to: minLevel...maxLevel)
+    }
+
+    static func zoomedIn(_ level: Double) -> Double {
+        clamp(level + step)
+    }
+
+    static func zoomedOut(_ level: Double) -> Double {
+        clamp(level - step)
+    }
+}
+
 @MainActor
 @Observable
 final class Tab {
@@ -100,6 +121,18 @@ final class Tab {
     var canGoForward: Bool = false
     var isLoading: Bool = false
     var estimatedProgress: Double = 0
+
+    // NB: never assign to pageZoom inside this didSet -- under @Observable that
+    // re-enters the setter and didSet fires on every assignment, causing infinite
+    // recursion -> stack overflow at launch. Clamping is done at the assignment
+    // sites instead (init and BrowserStore.zoomIn/Out/resetFocused).
+    var pageZoom: Double = PageZoom.defaultLevel {
+        didSet {
+            guard pageZoom != oldValue else { return }
+            applyPageZoom()
+            notifyPersistenceChanged()
+        }
+    }
 
     var isBlank: Bool { currentURL.isEmpty }
 
@@ -155,6 +188,7 @@ final class Tab {
 
     init(id: UUID = UUID(), url: String = "", title: String? = nil,
          scrollOffset: CGPoint = .zero,
+         pageZoom: Double = PageZoom.defaultLevel,
          configuration providedConfiguration: WKWebViewConfiguration? = nil,
          history: HistoryStore?) {
         self.id = id
@@ -198,6 +232,10 @@ final class Tab {
         navDelegate.owner = self
         uiDelegate.owner = self
         wire()
+        // Restore the persisted zoom level. onPersistenceChange is still nil here,
+        // so the didSet's save notification is a no-op during construction.
+        self.pageZoom = PageZoom.clamp(pageZoom)
+        applyPageZoom()
         if !url.isEmpty, let target = URLNormalizer.resolve(url) {
             if scrollOffset != .zero {
                 pendingScrollRestore = scrollOffset
@@ -315,9 +353,27 @@ final class Tab {
         #endif
     }
 
+    /// Pushes the current `pageZoom` onto the web view. On macOS WKWebView exposes
+    /// a native `pageZoom`; on iOS there is no public API before 16-era betas, so
+    /// drive the CSS `zoom` on the document element instead, which survives until
+    /// the next navigation (hence the re-apply in `didFinishNavigation`).
+    func applyPageZoom() {
+        #if os(macOS)
+        webView.pageZoom = CGFloat(pageZoom)
+        #else
+        let level = pageZoom
+        webView.evaluateJavaScript(
+            "document.documentElement.style.zoom='\(level)';", completionHandler: nil)
+        #endif
+    }
+
     func didFinishNavigation() {
         isNavigationInFlight = false
         isRestoring = false
+        // CSS zoom is reset by each navigation on iOS; macOS's native pageZoom
+        // persists across loads but re-applying is harmless and keeps both paths
+        // identical.
+        applyPageZoom()
         guard let pending = pendingScrollRestore else { return }
         pendingScrollRestore = nil
         #if !os(macOS)
@@ -1168,8 +1224,9 @@ struct TabRecord: Codable, Identifiable, Hashable {
     var title: String?
     var scrollX: Double
     var scrollY: Double
+    var pageZoom: Double
 
-    enum CodingKeys: String, CodingKey { case id, url, title, scrollX, scrollY }
+    enum CodingKeys: String, CodingKey { case id, url, title, scrollX, scrollY, pageZoom }
 
     init(_ tab: Tab) {
         self.id = tab.id
@@ -1177,15 +1234,18 @@ struct TabRecord: Codable, Identifiable, Hashable {
         self.title = tab.title
         self.scrollX = Double(tab.scrollOffset.x)
         self.scrollY = Double(tab.scrollOffset.y)
+        self.pageZoom = tab.pageZoom
     }
 
     init(id: UUID, url: String, title: String?,
-         scrollX: Double = 0, scrollY: Double = 0) {
+         scrollX: Double = 0, scrollY: Double = 0,
+         pageZoom: Double = PageZoom.defaultLevel) {
         self.id = id
         self.url = url
         self.title = title
         self.scrollX = scrollX
         self.scrollY = scrollY
+        self.pageZoom = pageZoom
     }
 
     init(from decoder: Decoder) throws {
@@ -1195,5 +1255,6 @@ struct TabRecord: Codable, Identifiable, Hashable {
         title = try c.decodeIfPresent(String.self, forKey: .title)
         scrollX = try c.decodeIfPresent(Double.self, forKey: .scrollX) ?? 0
         scrollY = try c.decodeIfPresent(Double.self, forKey: .scrollY) ?? 0
+        pageZoom = try c.decodeIfPresent(Double.self, forKey: .pageZoom) ?? PageZoom.defaultLevel
     }
 }

@@ -332,7 +332,7 @@ enum Direction { case up, down, left, right }
 enum SplitSide { case before, after }
 
 extension Comparable {
-    func clamped(to range: ClosedRange<Self>) -> Self {
+    nonisolated func clamped(to range: ClosedRange<Self>) -> Self {
         min(max(self, range.lowerBound), range.upperBound)
     }
 }
@@ -411,6 +411,7 @@ final class BrowserStore {
                 let tab = Tab(id: record.id, url: record.url,
                               title: record.title,
                               scrollOffset: CGPoint(x: record.scrollX, y: record.scrollY),
+                              pageZoom: record.pageZoom,
                               history: history)
                 loadedTabs[tab.id] = tab
             }
@@ -816,6 +817,20 @@ final class BrowserStore {
     func forwardFocused()     { focusedTab?.goForward() }
     func findInFocused()      { focusedTab?.find() }
     func focusURLBar()        { focusURLBarTrigger &+= 1 }
+
+    func zoomInFocused() {
+        guard let tab = focusedTab else { return }
+        tab.pageZoom = PageZoom.zoomedIn(tab.pageZoom)
+    }
+
+    func zoomOutFocused() {
+        guard let tab = focusedTab else { return }
+        tab.pageZoom = PageZoom.zoomedOut(tab.pageZoom)
+    }
+
+    func resetZoomFocused() {
+        focusedTab?.pageZoom = PageZoom.defaultLevel
+    }
 
     func toggleZoom() {
         if zoomedTabID != nil {
@@ -1691,6 +1706,18 @@ final class HistoryStore {
 
     func clear() {
         entries = []
+        scheduleSave()
+    }
+
+    func delete(_ entry: HistoryEntry) {
+        delete(url: entry.url)
+    }
+
+    func delete(url: String) {
+        let key = URLCanonicalizer.key(url)
+        let filtered = entries.filter { $0.canonicalKey != key }
+        guard filtered.count != entries.count else { return }
+        entries = filtered
         scheduleSave()
     }
 

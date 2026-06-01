@@ -3,12 +3,14 @@ import SwiftUI
 @main
 struct zzApp: App {
     @State private var history = HistoryStore()
+    @State private var favicons = FaviconStore()
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup(for: WindowID.self) { $windowID in
             ContentView(windowID: windowID)
                 .environment(history)
+                .environment(favicons)
         } defaultValue: {
             WindowID()
         }
@@ -36,6 +38,7 @@ struct zzApp: App {
         Settings {
             SettingsView()
                 .environment(history)
+                .environment(favicons)
         }
         #endif
     }

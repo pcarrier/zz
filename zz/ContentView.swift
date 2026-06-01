@@ -21,9 +21,11 @@ private struct BrowserScene: View {
     @State private var urlEditingTabID: UUID?
     @State private var sidebarPresented: Bool = false
     @State private var settingsPresented: Bool = false
+    @State private var historyPresented: Bool = false
     @FocusState private var urlFocused: Bool
 
     @Environment(HistoryStore.self) private var history
+    @Environment(FaviconStore.self) private var favicons
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -99,6 +101,7 @@ private struct BrowserScene: View {
                 matches: matches,
                 sidebarPresented: $sidebarPresented,
                 settingsPresented: $settingsPresented,
+                historyPresented: $historyPresented,
                 onCommit: commit,
                 onSelect: selectSuggestion
             )
@@ -138,16 +141,23 @@ private struct BrowserScene: View {
         .sheet(isPresented: $sidebarPresented) {
             SidebarView { _ in sidebarPresented = false }
                 .environment(store)
+                .environment(favicons)
         }
         .sheet(isPresented: $settingsPresented) {
             SettingsView()
                 .environment(history)
+        }
+        .sheet(isPresented: $historyPresented) {
+            HistoryView(onOpen: commit)
+                .environment(history)
+                .environment(favicons)
         }
         .task { draft = store.focusedTab?.currentURL ?? "" }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
                 store.flushSave()
                 history.flushSave()
+                favicons.flushSave()
             }
         }
         .onOpenURL { url in
@@ -253,6 +263,14 @@ private struct ShortcutLayer: View {
             shortcut("Find on Page",     "f", action: store.findInFocused)
             shortcut("Back",             "[", action: store.backFocused)
             shortcut("Forward",          "]", action: store.forwardFocused)
+
+            // Per-tab page zoom. Plain Cmd-=/Cmd-+ zoom in, Cmd-- zoom out, Cmd-0
+            // resets; the Equalize Group binding uses Cmd-Opt-Ctrl-= so these are
+            // free.
+            shortcut("Zoom In",          "=", action: store.zoomInFocused)
+            shortcut("Zoom In (Plus)",   "+", action: store.zoomInFocused)
+            shortcut("Zoom Out",         "-", action: store.zoomOutFocused)
+            shortcut("Actual Size",      "0", action: store.resetZoomFocused)
             if !urlFocused {
                 shortcut("Back Arrow",    .leftArrow, action: store.backFocused)
                 shortcut("Forward Arrow", .rightArrow, action: store.forwardFocused)

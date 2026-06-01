@@ -310,14 +310,18 @@ struct SidebarTilePreview: View {
                     .stroke(.separator.opacity(0.5), lineWidth: 0.5)
             )
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(displayTitle)
-                    .font(.caption.weight(.medium))
-                    .lineLimit(1)
-                Text(displayHost)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            HStack(alignment: .top, spacing: 6) {
+                FaviconView(url: tab.currentURL, size: 14)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(displayTitle)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                    Text(displayHost)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             .frame(maxWidth: contentWidth, alignment: .leading)
         }
@@ -359,9 +363,7 @@ private struct StaticSidebarPreview: View {
         ZStack {
             Color.canvasSecondary
             VStack(spacing: 8) {
-                Image(systemName: "globe")
-                    .font(.system(size: 28, weight: .regular))
-                    .foregroundStyle(.secondary)
+                FaviconView(host: host, size: 32)
                 Text(host)
                     .font(.caption)
                     .foregroundStyle(.secondary)

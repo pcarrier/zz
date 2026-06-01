@@ -474,3 +474,168 @@ struct BrowserUtilityTests {
         }
     }
 }
+
+@MainActor
+struct FaviconLogicTests {
+
+    @Test func candidateURLsTryDirectThenGoogleFallback() {
+        let urls = FaviconLogic.candidateURLs(host: "example.com").map(\.absoluteString)
+        #expect(urls == [
+            "https://example.com/favicon.ico",
+            "https://www.google.com/s2/favicons?domain=example.com&sz=64"
+        ])
+    }
+
+    @Test func candidateURLsEmptyHostYieldsNothing() {
+        #expect(FaviconLogic.candidateURLs(host: "   ").isEmpty)
+        #expect(FaviconLogic.candidateURLs(host: "").isEmpty)
+    }
+
+    @Test func candidateURLsLowercaseHost() {
+        let urls = FaviconLogic.candidateURLs(host: "EXAMPLE.com").map(\.absoluteString)
+        #expect(urls.first == "https://example.com/favicon.ico")
+    }
+
+    @Test func fileNameIsStableSafeAndCaseInsensitive() {
+        let a = FaviconLogic.fileName(for: "example.com")
+        let b = FaviconLogic.fileName(for: "example.com")
+        let c = FaviconLogic.fileName(for: "EXAMPLE.COM")
+        #expect(a == b)
+        #expect(a == c)
+        #expect(a.hasSuffix(".img"))
+        #expect(!a.contains("/"))
+        #expect(!a.contains(":"))
+    }
+
+    @Test func fileNamesDifferAcrossHosts() {
+        #expect(FaviconLogic.fileName(for: "example.com") != FaviconLogic.fileName(for: "example.org"))
+    }
+
+    @Test func deleteRemovesMatchingEntry() {
+        let store = HistoryStore()
+        store.clear()
+        store.record(url: "https://a.com/page", title: "A")
+        store.record(url: "https://b.com/page", title: "B")
+        #expect(store.entries.count == 2)
+        store.delete(url: "https://a.com/page")
+        #expect(store.entries.count == 1)
+        #expect(store.entries.first?.url == "https://b.com/page")
+    }
+
+    @Test func deleteMatchesCanonicalVariants() {
+        let store = HistoryStore()
+        store.clear()
+        store.record(url: "https://x.com/page", title: "X")
+        // A different surface form that canonicalizes to the same key.
+        store.delete(url: "http://www.x.com/page")
+        #expect(store.entries.isEmpty)
+    }
+
+    @Test func deleteUnknownURLIsNoOp() {
+        let store = HistoryStore()
+        store.clear()
+        store.record(url: "https://a.com", title: "A")
+        store.delete(url: "https://missing.com")
+        #expect(store.entries.count == 1)
+    }
+
+    @Test func deleteEntryRemovesByValue() {
+        let store = HistoryStore()
+        store.clear()
+        store.record(url: "https://a.com", title: "A")
+        store.record(url: "https://b.com", title: "B")
+        guard let entry = store.entries.first(where: { $0.url == "https://a.com" }) else {
+            Issue.record("expected recorded entry")
+            return
+        }
+        store.delete(entry)
+        #expect(store.entries.count == 1)
+        #expect(store.entries.allSatisfy { $0.url != "https://a.com" })
+    }
+
+    @Test func historyGroupingBucketsByDayNewestFirst() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000) // fixed reference
+        let cal = Calendar.current
+        let today = now
+        let yesterday = cal.date(byAdding: .day, value: -1, to: now)!
+        let lastWeek = cal.date(byAdding: .day, value: -7, to: now)!
+        let entries = [
+            HistoryEntry(url: "https://old.com", title: "Old", lastVisited: lastWeek),
+            HistoryEntry(url: "https://today.com", title: "Today", lastVisited: today),
+            HistoryEntry(url: "https://yest.com", title: "Yest", lastVisited: yesterday),
+        ]
+        let groups = HistoryView.grouped(entries, now: now)
+        #expect(groups.count == 3)
+        #expect(groups.first?.title == "Today")
+        #expect(groups[1].title == "Yesterday")
+        #expect(groups.first?.entries.first?.url == "https://today.com")
+    }
+
+    @Test func decodeRejectsGarbageData() {
+        #expect(FaviconLogic.decode(Data()) == nil)
+        #expect(FaviconLogic.decode(Data([0x00, 0x01, 0x02, 0x03])) == nil)
+    }
+
+    @Test func evictionDropsOldestBeyondCap() {
+        let order = ["a", "b", "c", "d", "e"]
+        #expect(FaviconLogic.hostsToEvict(order: order, cap: 3) == ["a", "b"])
+        #expect(FaviconLogic.hostsToEvict(order: order, cap: 5).isEmpty)
+        #expect(FaviconLogic.hostsToEvict(order: order, cap: 10).isEmpty)
+        #expect(FaviconLogic.hostsToEvict(order: order, cap: 0).isEmpty)
+    }
+
+    @Test func tileMenuBlankTileOnlyCloses() {
+        let actions = TileMenuActions(isBlank: true)
+        #expect(!actions.canDuplicate)
+        #expect(!actions.canCopyURL)
+        #expect(!actions.canReload)
+        #expect(!actions.canPark)
+    }
+
+    @Test func tileMenuLoadedTileOffersAllActions() {
+        let actions = TileMenuActions(isBlank: false)
+        #expect(actions.canDuplicate)
+        #expect(actions.canCopyURL)
+        #expect(actions.canReload)
+        #expect(actions.canPark)
+    }
+
+    // MARK: Page zoom
+
+    @Test func pageZoomStepsByTenths() {
+        #expect(PageZoom.zoomedIn(1.0) == 1.1)
+        #expect(PageZoom.zoomedOut(1.0) == 0.9)
+    }
+
+    @Test func pageZoomClampsToBounds() {
+        #expect(PageZoom.clamp(0.1) == PageZoom.minLevel)
+        #expect(PageZoom.clamp(9.0) == PageZoom.maxLevel)
+        #expect(PageZoom.clamp(1.25) == 1.25)
+    }
+
+    @Test func pageZoomStepsSaturateAtBounds() {
+        // Zooming out from the floor / in from the ceiling never escapes the range.
+        #expect(PageZoom.zoomedOut(PageZoom.minLevel) == PageZoom.minLevel)
+        #expect(PageZoom.zoomedIn(PageZoom.maxLevel) == PageZoom.maxLevel)
+    }
+
+    @Test func tabRecordDecodesPageZoom() throws {
+        let json = #"{"id":"\#(UUID().uuidString)","url":"https://a.com","scrollX":0,"scrollY":0,"pageZoom":1.5}"#
+        let record = try JSONDecoder().decode(TabRecord.self, from: Data(json.utf8))
+        #expect(record.pageZoom == 1.5)
+    }
+
+    @Test func legacyTabRecordDefaultsPageZoomToOne() throws {
+        // Pre-zoom snapshots have no pageZoom key; decode must default to 1.0.
+        let json = #"{"id":"\#(UUID().uuidString)","url":"https://a.com","scrollX":0,"scrollY":0}"#
+        let record = try JSONDecoder().decode(TabRecord.self, from: Data(json.utf8))
+        #expect(record.pageZoom == PageZoom.defaultLevel)
+    }
+
+    @Test func tabRecordPageZoomRoundTrips() throws {
+        let original = TabRecord(id: UUID(), url: "https://a.com", title: "A", pageZoom: 1.3)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(TabRecord.self, from: data)
+        #expect(decoded.pageZoom == 1.3)
+    }
+}

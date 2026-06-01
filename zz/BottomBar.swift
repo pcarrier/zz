@@ -8,6 +8,7 @@ struct BottomBar: View {
     let matches: [OmniboxItem]
     @Binding var sidebarPresented: Bool
     @Binding var settingsPresented: Bool
+    @Binding var historyPresented: Bool
     let onCommit: (String) -> Void
     let onSelect: (OmniboxItem) -> Void
 
@@ -46,7 +47,8 @@ struct BottomBar: View {
                 MoreMenu(
                     tab: tab,
                     isCompact: isCompact,
-                    settingsPresented: $settingsPresented
+                    settingsPresented: $settingsPresented,
+                    historyPresented: $historyPresented
                 )
                 BarIconButton(name: "sidebar.right",
                               enabled: !store.parked.isEmpty,
@@ -112,7 +114,8 @@ struct BottomBar: View {
             MoreMenu(
                 tab: tab,
                 isCompact: false,
-                settingsPresented: $settingsPresented
+                settingsPresented: $settingsPresented,
+                historyPresented: $historyPresented
             )
             BarIconButton(name: "xmark", enabled: tab != nil,
                           action: { if let id = store.focusedTabID { store.close(id) } },
@@ -152,6 +155,7 @@ private struct MoreMenu: View {
     let tab: Tab?
     let isCompact: Bool
     @Binding var settingsPresented: Bool
+    @Binding var historyPresented: Bool
 
     @Environment(BrowserStore.self) private var store
     @Environment(HistoryStore.self) private var history
@@ -170,6 +174,12 @@ private struct MoreMenu: View {
             privacyHistoryMenu
 
             Divider()
+
+            Button {
+                historyPresented = true
+            } label: {
+                Label("History", systemImage: "clock.arrow.circlepath")
+            }
 
             Button {
                 settingsPresented = true

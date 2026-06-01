@@ -2,6 +2,11 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 import Observation
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 struct TileView: View {
     let tabID: UUID
@@ -86,6 +91,65 @@ struct TileView: View {
             store: store, tabID: tabID, state: dropState
         ))
         .onDisappear { dropState.clear() }
+        .contextMenu { tileMenu(for: tab) }
+    }
+
+    @ViewBuilder
+    private func tileMenu(for tab: Tab) -> some View {
+        let actions = TileMenuActions(isBlank: tab.isBlank)
+
+        if actions.canDuplicate {
+            Button {
+                store.split(tabID, axis: .vertical, side: .after,
+                            loadURL: tab.currentURL)
+            } label: {
+                Label("Duplicate Tile", systemImage: "plus.rectangle.on.rectangle")
+            }
+        }
+
+        if actions.canCopyURL {
+            Button {
+                copyURL(tab.currentURL)
+            } label: {
+                Label("Copy URL", systemImage: "doc.on.doc")
+            }
+        }
+
+        if actions.canReload {
+            Button {
+                tab.reload()
+            } label: {
+                Label("Reload", systemImage: "arrow.clockwise")
+            }
+        }
+
+        if actions.canPark {
+            Button {
+                store.park(tabID)
+            } label: {
+                Label("Park", systemImage: "tray.and.arrow.down")
+            }
+        }
+
+        if actions.canPark || actions.canCopyURL {
+            Divider()
+        }
+
+        Button(role: .destructive) {
+            store.close(tabID)
+        } label: {
+            Label("Close", systemImage: "xmark")
+        }
+    }
+
+    private func copyURL(_ urlString: String) {
+        #if canImport(UIKit)
+        UIPasteboard.general.string = urlString
+        #elseif canImport(AppKit)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(urlString, forType: .string)
+        #endif
     }
 
     @MainActor
@@ -96,6 +160,27 @@ struct TileView: View {
         case .parkedTab(let parkedTabID):
             store.dropParked(parkedTabID, on: tabID, zone: zone)
         }
+    }
+}
+
+// MARK: - Context-menu action gating
+
+/// Pure description of which tile context-menu actions are valid for a tile's
+/// state. A blank tile (no URL loaded) only offers Close; everything else also
+/// offers Duplicate / Copy URL / Reload / Park.
+struct TileMenuActions: Equatable {
+    let canDuplicate: Bool
+    let canCopyURL: Bool
+    let canReload: Bool
+    let canPark: Bool
+    /// Close is always available, so it has no stored flag.
+
+    init(isBlank: Bool) {
+        let hasContent = !isBlank
+        canDuplicate = hasContent
+        canCopyURL = hasContent
+        canReload = hasContent
+        canPark = hasContent
     }
 }
 
