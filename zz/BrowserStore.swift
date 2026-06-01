@@ -412,6 +412,8 @@ final class BrowserStore {
                               title: record.title,
                               scrollOffset: CGPoint(x: record.scrollX, y: record.scrollY),
                               pageZoom: record.pageZoom,
+                              requestsDesktopSite: record.requestsDesktopSite,
+                              isMuted: record.isMuted,
                               history: history)
                 loadedTabs[tab.id] = tab
             }
@@ -435,7 +437,8 @@ final class BrowserStore {
                 tabs[key] = nil
             }
         } else {
-            let tab = Tab(history: history)
+            let tab = Tab(requestsDesktopSite: BrowserPreferences.requestsDesktopSite,
+                          history: history)
             self.tabs = [tab.id: tab]
             self.root = .leaf(tabID: tab.id)
             self.parked = []
@@ -525,7 +528,8 @@ final class BrowserStore {
 
     @discardableResult
     private func makeBlankTab(configuration: WKWebViewConfiguration? = nil) -> UUID {
-        let tab = Tab(configuration: configuration, history: history)
+        let tab = Tab(requestsDesktopSite: BrowserPreferences.requestsDesktopSite,
+                      configuration: configuration, history: history)
         attachCallbacks(to: tab)
         tabs[tab.id] = tab
         return tab.id
@@ -1021,11 +1025,211 @@ final class BrowserStore {
             .appending(path: windowID.id.uuidString, directoryHint: .isDirectory)
             .appending(path: "state.json")
     }
+
+    // MARK: Layout presets
+
+    /// Captures the current window's arrangement (BSP root + the visible/parked
+    /// tabs' records) as a named, restorable preset. Mirrors currentSnapshot()'s
+    /// validation so a preset never references a tab that no longer exists.
+    func captureLayoutPreset(named name: String) -> LayoutPreset {
+        let visibleTabIDs = root.tabIDs()
+        let referenced = Set(visibleTabIDs)
+        let validFocusedTabID: UUID?
+        if let focusedTabID, root.contains(focusedTabID), tabs[focusedTabID] != nil {
+            validFocusedTabID = focusedTabID
+        } else {
+            validFocusedTabID = visibleTabIDs.first { tabs[$0] != nil }
+        }
+        let tabRecords: [TabRecord] = referenced.compactMap { id in
+            tabs[id].map(TabRecord.init)
+        }
+        return LayoutPreset(
+            name: name,
+            root: root,
+            focusedTabID: validFocusedTabID,
+            tabs: tabRecords
+        )
+    }
+
+    /// Restores a preset INTO the current window, fully replacing the current
+    /// arrangement. Rebuilds live Tab objects from the stored records using the
+    /// same logic as session restore (including deduplicatingLeafIDs so leaf ids
+    /// stay unique), then swaps root/tabs/focus atomically.
+    func applyLayoutPreset(_ preset: LayoutPreset) {
+        var loadedTabs: [UUID: Tab] = [:]
+        for record in preset.tabs {
+            let tab = Tab(id: record.id, url: record.url,
+                          title: record.title,
+                          scrollOffset: CGPoint(x: record.scrollX, y: record.scrollY),
+                          pageZoom: record.pageZoom,
+                          requestsDesktopSite: record.requestsDesktopSite,
+                          isMuted: record.isMuted,
+                          history: history)
+            attachCallbacks(to: tab)
+            loadedTabs[tab.id] = tab
+        }
+
+        var seenLeafIDs = Set<UUID>()
+        let newRoot = preset.root.deduplicatingLeafIDs(seen: &seenLeafIDs)
+
+        // deduplicatingLeafIDs may mint fresh ids for repeated leaves; back those
+        // with blank tabs so every leaf has a live Tab, exactly like session restore.
+        for tabID in newRoot.tabIDs() where loadedTabs[tabID] == nil {
+            loadedTabs[tabID] = Tab(id: tabID, history: history)
+            if let tab = loadedTabs[tabID] { attachCallbacks(to: tab) }
+        }
+
+        // Drop any record not referenced by the deduplicated tree.
+        let referenced = Set(newRoot.tabIDs())
+        for key in Array(loadedTabs.keys) where !referenced.contains(key) {
+            loadedTabs[key] = nil
+        }
+
+        zoomedTabID = nil
+        selectedGroupID = nil
+        // Parked tabs are window-local, not part of a preset; leave them intact.
+        tabs = tabs.filter { parked.contains($0.key) }
+        for (id, tab) in loadedTabs { tabs[id] = tab }
+        root = newRoot
+        if let focused = preset.focusedTabID,
+           newRoot.contains(focused),
+           tabs[focused] != nil {
+            focusedTabID = focused
+        } else {
+            focusedTabID = newRoot.tabIDs().first { tabs[$0] != nil }
+        }
+        focusURLBarTrigger &+= 1
+        scheduleSave()
+    }
+}
+
+// MARK: - Layout presets
+
+/// A named, restorable pane arrangement. Reuses the same Codable BSPNode/TabRecord
+/// shapes as the per-window snapshot. New fields MUST decode with decodeIfPresent
+/// so older saved presets keep loading.
+struct LayoutPreset: Codable, Identifiable, Hashable {
+    let id: UUID
+    var name: String
+    var root: BSPNode
+    var focusedTabID: UUID?
+    var tabs: [TabRecord]
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, root, focusedTabID, tabs
+    }
+
+    init(id: UUID = UUID(), name: String, root: BSPNode,
+         focusedTabID: UUID?, tabs: [TabRecord]) {
+        self.id = id
+        self.name = name
+        self.root = root
+        self.focusedTabID = focusedTabID
+        self.tabs = tabs
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Layout"
+        root = try c.decode(BSPNode.self, forKey: .root)
+        focusedTabID = try c.decodeIfPresent(UUID.self, forKey: .focusedTabID)
+        tabs = try c.decodeIfPresent([TabRecord].self, forKey: .tabs) ?? []
+    }
+}
+
+/// Pure, testable transforms over the preset list. Kept free of any store/UI
+/// state so add/delete behavior is unit-testable in isolation. nonisolated so the
+/// helpers can be used off the main actor (e.g. in default-argument position).
+nonisolated enum LayoutPresetLogic {
+    /// Normalizes a user-entered preset name: trims whitespace and falls back to
+    /// "Layout" for an all-whitespace name so a preset is never nameless.
+    static func normalizedName(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Layout" : trimmed
+    }
+
+    static func adding(_ preset: LayoutPreset, to list: [LayoutPreset]) -> [LayoutPreset] {
+        list + [preset]
+    }
+
+    static func removing(id: UUID, from list: [LayoutPreset]) -> [LayoutPreset] {
+        list.filter { $0.id != id }
+    }
+}
+
+/// Persisted, named pane layouts. Mirrors the other stores: encode happens on the
+/// main actor (debounced), and the disk write is handed to a nonisolated writer so
+/// the I/O runs off the main actor.
+@MainActor
+@Observable
+final class LayoutPresetStore {
+    private(set) var presets: [LayoutPreset] = []
+
+    @ObservationIgnored
+    private var saveTask: Task<Void, Never>?
+
+    init() {
+        if let data = try? Data(contentsOf: Self.fileURL),
+           let decoded = try? JSONDecoder().decode([LayoutPreset].self, from: data) {
+            presets = decoded
+        }
+    }
+
+    func add(_ preset: LayoutPreset) {
+        presets = LayoutPresetLogic.adding(preset, to: presets)
+        scheduleSave()
+    }
+
+    func delete(id: UUID) {
+        let updated = LayoutPresetLogic.removing(id: id, from: presets)
+        guard updated.count != presets.count else { return }
+        presets = updated
+        scheduleSave()
+    }
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        let snapshot = presets
+        saveTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            await Self.writeDataOffMain(data)
+        }
+    }
+
+    func flushSave() {
+        saveTask?.cancel()
+        guard let data = try? JSONEncoder().encode(presets) else { return }
+        Self.writeData(data)
+    }
+
+    nonisolated private static func writeDataOffMain(_ data: Data) async {
+        writeData(data)
+    }
+
+    nonisolated private static func writeData(_ data: Data) {
+        do {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            persistenceLogger.error("LayoutPresetStore save failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    nonisolated private static var fileURL: URL {
+        URL.documentsDirectory
+            .appending(path: "zz", directoryHint: .isDirectory)
+            .appending(path: "layouts.json")
+    }
 }
 
 // MARK: - Global history (LRU, fuzzy-searchable)
 
-struct HistoryEntry: Codable, Identifiable, Hashable {
+nonisolated struct HistoryEntry: Codable, Identifiable, Hashable {
     var id: String { url }
     var url: String
     var title: String?
@@ -1065,7 +1269,7 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
 
 /// The ONLY canonicalizer. record(), suggestion dedup, and the open-tab map all
 /// call it so the dedup/match key never drifts between call sites.
-enum URLCanonicalizer {
+nonisolated enum URLCanonicalizer {
     /// Produces the dedup/match key. Collapses http/https + www, drops default
     /// ports, drops a single empty trailing slash, keeps the query, drops the
     /// fragment.
@@ -1161,7 +1365,7 @@ struct OmniboxItem: Identifiable, Hashable {
 
 /// Deterministic, tiered "frecency" ranker. Pure over in-memory data plus
 /// injected open-tab values and an injected `now`. Never imports BrowserStore.
-enum OmniboxRanker {
+nonisolated enum OmniboxRanker {
     // Tier bases. Gap = 2000 so any higher tier always beats any lower tier
     // regardless of frecency/earliness (bounded < 2000 by construction).
     static let tierOpenTab = 12000   // 0
@@ -1484,7 +1688,8 @@ enum OmniboxSuggestions {
                         openTabs: [(url: String, title: String?, tabID: UUID)] = [],
                         now: Date = .now,
                         limit: Int,
-                        searchTemplate: String = SearchPreferences.activeTemplate) -> [OmniboxItem] {
+                        searchTemplate: String = SearchPreferences.activeTemplate,
+                        keywordEngines: [KeywordEngine] = SearchPreferences.keywordEngines) -> [OmniboxItem] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Empty query: skip tiering, return open tabs then history by frecency.
@@ -1495,7 +1700,8 @@ enum OmniboxSuggestions {
         let norm = OmniboxRanker.normalize(query)
 
         // 1. Direct entry (typed URL/search), always candidate index 0.
-        let direct = directItem(for: trimmed, searchTemplate: searchTemplate)
+        let direct = directItem(for: trimmed, searchTemplate: searchTemplate,
+                                keywordEngines: keywordEngines)
         let directKey = direct.map { URLCanonicalizer.key($0.url) }
 
         // 2. Open tabs -> Tier-0 candidates.
@@ -1638,13 +1844,21 @@ enum OmniboxSuggestions {
     }
 
     static func directItem(for query: String,
-                           searchTemplate: String = SearchPreferences.activeTemplate) -> OmniboxItem? {
+                           searchTemplate: String = SearchPreferences.activeTemplate,
+                           keywordEngines: [KeywordEngine] = SearchPreferences.keywordEngines) -> OmniboxItem? {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
-              let resolved = URLNormalizer.resolve(trimmed, searchTemplate: searchTemplate) else {
+              let resolved = URLNormalizer.resolve(trimmed, searchTemplate: searchTemplate,
+                                                   keywordEngines: keywordEngines) else {
             return nil
         }
         let url = resolved.absoluteString
+        // An active keyword bang (keyword + query) always renders as a search row
+        // labeled with the matched engine, e.g. "Search GitHub".
+        if let m = KeywordBangs.match(trimmed, engines: keywordEngines), !m.query.isEmpty {
+            return OmniboxItem(id: url, url: url,
+                               title: "Search \(m.engine.title)", kind: .search)
+        }
         let isSearch = directIsSearch(for: trimmed, resolved: resolved, searchTemplate: searchTemplate)
         return OmniboxItem(
             id: url,
@@ -1776,7 +1990,7 @@ final class HistoryStore {
 
 // MARK: - Fuzzy matching
 
-enum FuzzyMatch {
+nonisolated enum FuzzyMatch {
     static func score(needle: String, in haystack: String) -> Int? {
         let n = Array(needle.lowercased())
         let h = Array(haystack.lowercased())
@@ -1822,7 +2036,7 @@ enum FuzzyMatch {
     }
 }
 
-private extension Character {
+nonisolated private extension Character {
     var isFuzzyBoundary: Bool {
         self == " " || self == "/" || self == "." || self == "-" ||
         self == "_" || self == ":" || self == "?" || self == "&" ||
@@ -1832,11 +2046,17 @@ private extension Character {
 
 // MARK: - URL normalization
 
-enum URLNormalizer {
+nonisolated enum URLNormalizer {
     static func resolve(_ input: String,
-                        searchTemplate: String = SearchPreferences.activeTemplate) -> URL? {
+                        searchTemplate: String = SearchPreferences.activeTemplate,
+                        keywordEngines: [KeywordEngine] = SearchPreferences.keywordEngines) -> URL? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        // Keyword bangs win over default search/URL handling, but only when a
+        // keyword + remaining query is present. A bare keyword falls through.
+        if let expanded = KeywordBangs.expand(trimmed, engines: keywordEngines) {
+            return expanded
+        }
         // Foundation does NOT lowercase URL.scheme, so compare case-insensitively.
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
             if scheme == "http" || scheme == "https" || scheme == "about" || scheme == "file" {

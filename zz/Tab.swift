@@ -109,6 +109,31 @@ nonisolated enum PageZoom {
     }
 }
 
+/// Pure description of the WebKit SPI surface used for per-page muting and audio
+/// detection. Kept free of any WebKit/UI state so the selector/KVC-key choices
+/// are unit-testable in isolation and isolated to a single place.
+///
+/// WebKit has no PUBLIC mute API: the public `WKWebView.setAllMediaPlaybackSuspended(_:)`
+/// only suspends/pauses media, it does not mute it. True muting requires the SPI
+/// `_setPageMuted:`, and live audio detection requires the SPI `_isPlayingAudio`.
+/// Both are accessed reflectively (responds(to:)/KVC) and degrade gracefully to
+/// no-ops when unavailable, so nothing crashes if Apple removes them.
+nonisolated enum WebMediaControl {
+    /// `-[WKWebView _setPageMuted:]` takes a bitmask; `1 << 0` mutes audio.
+    static let audioMutedFlag: UInt = 1 << 0
+
+    /// SPI selector that sets the page-muted bitmask.
+    static let setPageMutedSelector = "_setPageMuted:"
+
+    /// SPI KVO key reporting whether the page is currently playing audible audio.
+    static let isPlayingAudioKey = "_isPlayingAudio"
+
+    /// The muted bitmask to apply for a given desired mute state.
+    static func mutedState(_ muted: Bool) -> UInt {
+        muted ? audioMutedFlag : 0
+    }
+}
+
 @MainActor
 @Observable
 final class Tab {
@@ -133,6 +158,33 @@ final class Tab {
             notifyPersistenceChanged()
         }
     }
+
+    // "Request Desktop Site" content mode. NB: like pageZoom, never assign to
+    // this inside its own didSet -- under @Observable that re-enters the setter
+    // and didSet fires on every assignment, causing infinite recursion. Just
+    // apply the side effects; the value itself is set at assignment sites.
+    var requestsDesktopSite: Bool = BrowserPreferences.defaultRequestsDesktopSite {
+        didSet {
+            guard requestsDesktopSite != oldValue else { return }
+            applyDesktopSitePreference(reload: true)
+            notifyPersistenceChanged()
+        }
+    }
+
+    // Per-tab audio mute. NB: like pageZoom, never assign to this inside its own
+    // didSet -- under @Observable that re-enters the setter and didSet fires on
+    // every assignment, causing infinite recursion. Just apply the side effect.
+    var isMuted: Bool = false {
+        didSet {
+            guard isMuted != oldValue else { return }
+            applyMuted()
+            notifyPersistenceChanged()
+        }
+    }
+
+    // True while the page is producing audible audio. Driven by the `_isPlayingAudio`
+    // SPI via KVO when available; stays false (no live indicator) otherwise.
+    private(set) var isPlayingAudio: Bool = false
 
     var isBlank: Bool { currentURL.isEmpty }
 
@@ -174,6 +226,12 @@ final class Tab {
     @ObservationIgnored
     private let navDelegate = TabNavigationDelegate()
 
+    // Receiver for the `_isPlayingAudio` SPI KVO. Kept separate from the public-key
+    // observers (which use the typed `webView.observe(\.keyPath)` API) because the
+    // SPI key is a string and must be observed reflectively + guarded.
+    @ObservationIgnored
+    private var audioObserver: AudioPlaybackObserver?
+
     @ObservationIgnored
     private weak var history: HistoryStore?
 
@@ -189,6 +247,8 @@ final class Tab {
     init(id: UUID = UUID(), url: String = "", title: String? = nil,
          scrollOffset: CGPoint = .zero,
          pageZoom: Double = PageZoom.defaultLevel,
+         requestsDesktopSite: Bool = BrowserPreferences.defaultRequestsDesktopSite,
+         isMuted: Bool = false,
          configuration providedConfiguration: WKWebViewConfiguration? = nil,
          history: HistoryStore?) {
         self.id = id
@@ -236,6 +296,16 @@ final class Tab {
         // so the didSet's save notification is a no-op during construction.
         self.pageZoom = PageZoom.clamp(pageZoom)
         applyPageZoom()
+        // Restore the persisted content mode. onPersistenceChange is still nil,
+        // so the didSet's save notification is a no-op during construction. Apply
+        // without an explicit reload: the initial load below already picks it up,
+        // and a blank tab has nothing to reload.
+        self.requestsDesktopSite = requestsDesktopSite
+        applyDesktopSitePreference(reload: false)
+        // Restore the persisted mute state. onPersistenceChange is still nil here,
+        // so the didSet's save notification is a no-op during construction.
+        self.isMuted = isMuted
+        applyMuted()
         if !url.isEmpty, let target = URLNormalizer.resolve(url) {
             if scrollOffset != .zero {
                 pendingScrollRestore = scrollOffset
@@ -367,6 +437,41 @@ final class Tab {
         #endif
     }
 
+    /// Pushes the current `requestsDesktopSite` content mode onto the web view.
+    /// On iOS this sets `preferredContentMode` on the default webpage preferences,
+    /// which WebKit honors on the next navigation. `preferredContentMode` is
+    /// iOS-only, so on macOS we fall back to spoofing a desktop Safari user agent
+    /// (`customUserAgent`); `nil` restores WebKit's platform default.
+    func applyDesktopSitePreference(reload: Bool) {
+        #if os(iOS)
+        webView.configuration.defaultWebpagePreferences.preferredContentMode =
+            requestsDesktopSite ? .desktop : .recommended
+        #else
+        webView.customUserAgent = DesktopSiteMode.customUserAgent(requestsDesktop: requestsDesktopSite)
+        #endif
+        if reload, webView.url != nil {
+            webView.reload()
+        }
+    }
+
+    /// Pushes the current `isMuted` state onto the web view via the `_setPageMuted:`
+    /// SPI. There is no public mute API (the public suspend API only pauses media,
+    /// it does not silence it), so this is accessed reflectively and guarded with
+    /// `responds(to:)`; if the SPI is unavailable this is a harmless no-op rather
+    /// than a crash. See WebMediaControl for the selector/flag definitions.
+    func applyMuted() {
+        let selector = NSSelectorFromString(WebMediaControl.setPageMutedSelector)
+        guard webView.responds(to: selector) else { return }
+        let state = WebMediaControl.mutedState(isMuted)
+        // -[WKWebView _setPageMuted:] takes an NSUInteger bitmask. Invoke through
+        // an NSNumber-typed perform so we don't hard-link the SPI symbol.
+        _ = webView.perform(selector, with: NSNumber(value: state))
+    }
+
+    func toggleMuted() {
+        isMuted.toggle()
+    }
+
     func didFinishNavigation() {
         isNavigationInFlight = false
         isRestoring = false
@@ -374,6 +479,9 @@ final class Tab {
         // persists across loads but re-applying is harmless and keeps both paths
         // identical.
         applyPageZoom()
+        // The page-muted bitmask does not reliably survive a cross-document
+        // navigation; re-apply so a muted tab stays muted after navigating.
+        applyMuted()
         guard let pending = pendingScrollRestore else { return }
         pendingScrollRestore = nil
         #if !os(macOS)
@@ -709,6 +817,57 @@ final class Tab {
             }
         )
         #endif
+        wireAudioPlayback()
+    }
+
+    /// Observes the `_isPlayingAudio` SPI key via KVO so the live audio indicator
+    /// reflects real playback. The key is SPI, so this is fully guarded: if the
+    /// web view does not expose it, the indicator simply never lights up (the
+    /// mute toggle still works). Nothing crashes when the SPI is absent.
+    private func wireAudioPlayback() {
+        let key = WebMediaControl.isPlayingAudioKey
+        guard webView.responds(to: NSSelectorFromString(key)) else { return }
+        audioObserver = AudioPlaybackObserver(webView: webView, key: key) { [weak self] playing in
+            Task { @MainActor [weak self] in
+                guard let self, self.isPlayingAudio != playing else { return }
+                self.isPlayingAudio = playing
+            }
+        }
+    }
+}
+
+/// Bridges the `_isPlayingAudio` SPI KVO (a string key, so the typed
+/// `WKWebView.observe(\.keyPath)` API cannot be used) into a Swift callback.
+/// Registration is the caller's responsibility to guard with `responds(to:)`.
+private final class AudioPlaybackObserver: NSObject {
+    private weak var webView: WKWebView?
+    private let key: String
+    private let onChange: (Bool) -> Void
+
+    init(webView: WKWebView, key: String, onChange: @escaping (Bool) -> Void) {
+        self.webView = webView
+        self.key = key
+        self.onChange = onChange
+        super.init()
+        webView.addObserver(self, forKeyPath: key, options: [.new, .initial], context: nil)
+    }
+
+    deinit {
+        webView?.removeObserver(self, forKeyPath: key)
+    }
+
+    override func observeValue(
+        forKeyPath keyPath: String?,
+        of object: Any?,
+        change: [NSKeyValueChangeKey: Any]?,
+        context: UnsafeMutableRawPointer?
+    ) {
+        guard keyPath == key else {
+            super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
+            return
+        }
+        let playing = (change?[.newKey] as? NSNumber)?.boolValue ?? false
+        onChange(playing)
     }
 }
 
@@ -1225,8 +1384,12 @@ struct TabRecord: Codable, Identifiable, Hashable {
     var scrollX: Double
     var scrollY: Double
     var pageZoom: Double
+    var requestsDesktopSite: Bool
+    var isMuted: Bool
 
-    enum CodingKeys: String, CodingKey { case id, url, title, scrollX, scrollY, pageZoom }
+    enum CodingKeys: String, CodingKey {
+        case id, url, title, scrollX, scrollY, pageZoom, requestsDesktopSite, isMuted
+    }
 
     init(_ tab: Tab) {
         self.id = tab.id
@@ -1235,17 +1398,23 @@ struct TabRecord: Codable, Identifiable, Hashable {
         self.scrollX = Double(tab.scrollOffset.x)
         self.scrollY = Double(tab.scrollOffset.y)
         self.pageZoom = tab.pageZoom
+        self.requestsDesktopSite = tab.requestsDesktopSite
+        self.isMuted = tab.isMuted
     }
 
     init(id: UUID, url: String, title: String?,
          scrollX: Double = 0, scrollY: Double = 0,
-         pageZoom: Double = PageZoom.defaultLevel) {
+         pageZoom: Double = PageZoom.defaultLevel,
+         requestsDesktopSite: Bool = false,
+         isMuted: Bool = false) {
         self.id = id
         self.url = url
         self.title = title
         self.scrollX = scrollX
         self.scrollY = scrollY
         self.pageZoom = pageZoom
+        self.requestsDesktopSite = requestsDesktopSite
+        self.isMuted = isMuted
     }
 
     init(from decoder: Decoder) throws {
@@ -1256,5 +1425,7 @@ struct TabRecord: Codable, Identifiable, Hashable {
         scrollX = try c.decodeIfPresent(Double.self, forKey: .scrollX) ?? 0
         scrollY = try c.decodeIfPresent(Double.self, forKey: .scrollY) ?? 0
         pageZoom = try c.decodeIfPresent(Double.self, forKey: .pageZoom) ?? PageZoom.defaultLevel
+        requestsDesktopSite = try c.decodeIfPresent(Bool.self, forKey: .requestsDesktopSite) ?? false
+        isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
     }
 }

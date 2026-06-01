@@ -9,6 +9,9 @@ struct BottomBar: View {
     @Binding var sidebarPresented: Bool
     @Binding var settingsPresented: Bool
     @Binding var historyPresented: Bool
+    let onSaveLayout: () -> Void
+    let onApplyLayout: (LayoutPreset) -> Void
+    let onDeleteLayout: (UUID) -> Void
     let onCommit: (String) -> Void
     let onSelect: (OmniboxItem) -> Void
 
@@ -48,7 +51,10 @@ struct BottomBar: View {
                     tab: tab,
                     isCompact: isCompact,
                     settingsPresented: $settingsPresented,
-                    historyPresented: $historyPresented
+                    historyPresented: $historyPresented,
+                    onSaveLayout: onSaveLayout,
+                    onApplyLayout: onApplyLayout,
+                    onDeleteLayout: onDeleteLayout
                 )
                 BarIconButton(name: "sidebar.right",
                               enabled: !store.parked.isEmpty,
@@ -115,7 +121,10 @@ struct BottomBar: View {
                 tab: tab,
                 isCompact: false,
                 settingsPresented: $settingsPresented,
-                historyPresented: $historyPresented
+                historyPresented: $historyPresented,
+                onSaveLayout: onSaveLayout,
+                onApplyLayout: onApplyLayout,
+                onDeleteLayout: onDeleteLayout
             )
             BarIconButton(name: "xmark", enabled: tab != nil,
                           action: { if let id = store.focusedTabID { store.close(id) } },
@@ -156,9 +165,13 @@ private struct MoreMenu: View {
     let isCompact: Bool
     @Binding var settingsPresented: Bool
     @Binding var historyPresented: Bool
+    let onSaveLayout: () -> Void
+    let onApplyLayout: (LayoutPreset) -> Void
+    let onDeleteLayout: (UUID) -> Void
 
     @Environment(BrowserStore.self) private var store
     @Environment(HistoryStore.self) private var history
+    @Environment(LayoutPresetStore.self) private var layouts
     @Environment(\.openWindow) private var openWindow
     @AppStorage(BrowserPreferences.recordHistoryKey) private var recordHistory = true
 
@@ -171,6 +184,7 @@ private struct MoreMenu: View {
             }
 
             layoutMenu
+            layoutsMenu
             privacyHistoryMenu
 
             Divider()
@@ -255,6 +269,40 @@ private struct MoreMenu: View {
             }
         } label: {
             Label("Layout", systemImage: "rectangle.3.group")
+        }
+    }
+
+    @ViewBuilder
+    private var layoutsMenu: some View {
+        Menu {
+            Button {
+                onSaveLayout()
+            } label: {
+                Label("Save Current Layout…", systemImage: "square.and.arrow.down")
+            }
+
+            if !layouts.presets.isEmpty {
+                Divider()
+
+                ForEach(layouts.presets) { preset in
+                    Menu {
+                        Button {
+                            onApplyLayout(preset)
+                        } label: {
+                            Label("Apply", systemImage: "rectangle.on.rectangle")
+                        }
+                        Button(role: .destructive) {
+                            onDeleteLayout(preset.id)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    } label: {
+                        Text(preset.name)
+                    }
+                }
+            }
+        } label: {
+            Label("Layouts", systemImage: "square.grid.2x2")
         }
     }
 

@@ -10,11 +10,16 @@ struct SettingsView: View {
     @AppStorage(SearchPreferences.customTemplateKey)
     private var customSearchTemplate = SearchPreferences.defaultCustomTemplate
 
+    @State private var keywordEngines: [KeywordEngine] = SearchPreferences.keywordEngines
+
     @AppStorage(BrowserPreferences.newWindowPolicyKey)
     private var newWindowPolicyRaw = BrowserPreferences.defaultNewWindowPolicy.rawValue
 
     @AppStorage(BrowserPreferences.recordHistoryKey)
     private var recordHistory = true
+
+    @AppStorage(BrowserPreferences.requestDesktopSiteKey)
+    private var requestsDesktopSite = BrowserPreferences.defaultRequestsDesktopSite
 
     var body: some View {
         Form {
@@ -31,6 +36,48 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section("Keyword Searches") {
+                ForEach($keywordEngines) { $engine in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            TextField("Keyword", text: $engine.keyword)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 90)
+                            TextField("Title", text: $engine.title)
+                                .textFieldStyle(.roundedBorder)
+                            Button(role: .destructive) {
+                                keywordEngines.removeAll { $0.id == engine.id }
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        TextField("Search URL Template", text: $engine.templateURL)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+                Button {
+                    keywordEngines.append(
+                        KeywordEngine(keyword: "", templateURL: "https://example.com/search?q=%s", title: "")
+                    )
+                } label: {
+                    Label("Add Keyword Search", systemImage: "plus")
+                }
+                Text("Type the keyword followed by your query, e.g. \"gh swift\". Use %s where the search terms should go.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .onChange(of: keywordEngines) { _, newValue in
+                SearchPreferences.keywordEngines = newValue
+            }
+
+            Section("Content") {
+                Toggle("Request Desktop Site", isOn: $requestsDesktopSite)
+                Text("Default for new tabs. Toggle per tile from its context menu.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Pop-ups") {

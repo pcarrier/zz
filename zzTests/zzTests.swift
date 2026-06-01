@@ -30,6 +30,82 @@ struct BrowserUtilityTests {
         )?.absoluteString == "https://example.com/search?s=open%20ai")
     }
 
+    // MARK: - Keyword bangs
+
+    private static let bangEngines = [
+        KeywordEngine(keyword: "gh", templateURL: "https://github.com/search?q=%s", title: "GitHub"),
+        KeywordEngine(keyword: "w", templateURL: "https://en.wikipedia.org/wiki/Special:Search?search=%s", title: "Wikipedia"),
+    ]
+
+    @Test func keywordBangExpandsToEngineTemplate() {
+        let url = KeywordBangs.expand("gh swift testing", engines: Self.bangEngines)
+        #expect(url?.absoluteString == "https://github.com/search?q=swift%20testing")
+    }
+
+    @Test func keywordBangMatchIsCaseInsensitiveAndReportsRemainder() {
+        let m = KeywordBangs.match("GH  multi   word", engines: Self.bangEngines)
+        #expect(m?.engine.title == "GitHub")
+        #expect(m?.query == "multi   word")
+    }
+
+    @Test func bareKeywordHasEmptyQueryAndDoesNotExpand() {
+        let m = KeywordBangs.match("gh", engines: Self.bangEngines)
+        #expect(m?.engine.title == "GitHub")
+        #expect(m?.query == "")
+        // expand() requires a non-empty query, so a bare keyword falls through.
+        #expect(KeywordBangs.expand("gh", engines: Self.bangEngines) == nil)
+    }
+
+    @Test func nonKeywordInputIsUnaffectedByBangs() {
+        #expect(KeywordBangs.match("github.com", engines: Self.bangEngines) == nil)
+        #expect(KeywordBangs.expand("open ai", engines: Self.bangEngines) == nil)
+    }
+
+    @Test func resolveExpandsKeywordOverDefaultSearch() {
+        // With a matching keyword + query, resolve uses the engine template,
+        // not the default search template.
+        #expect(URLNormalizer.resolve(
+            "gh swift",
+            searchTemplate: SearchEngine.duckDuckGo.template!,
+            keywordEngines: Self.bangEngines
+        )?.absoluteString == "https://github.com/search?q=swift")
+    }
+
+    @Test func resolveLeavesNonKeywordInputToDefaultSearch() {
+        #expect(URLNormalizer.resolve(
+            "swift testing",
+            searchTemplate: SearchEngine.duckDuckGo.template!,
+            keywordEngines: Self.bangEngines
+        )?.absoluteString == "https://duckduckgo.com/?q=swift%20testing")
+    }
+
+    @Test func bareKeywordResolvesViaNormalHandling() {
+        // "w" alone: no remaining query, no dot, no space -> default search.
+        #expect(URLNormalizer.resolve(
+            "w",
+            searchTemplate: SearchEngine.duckDuckGo.template!,
+            keywordEngines: Self.bangEngines
+        )?.absoluteString == "https://duckduckgo.com/?q=w")
+    }
+
+    @Test func directItemLabelsMatchedEngine() {
+        let item = OmniboxSuggestions.directItem(
+            for: "gh swift",
+            searchTemplate: SearchEngine.duckDuckGo.template!,
+            keywordEngines: Self.bangEngines)
+        #expect(item?.kind == .search)
+        #expect(item?.title == "Search GitHub")
+        #expect(item?.url == "https://github.com/search?q=swift")
+    }
+
+    @Test func directItemKeepsPlainSearchLabelForNonKeyword() {
+        let item = OmniboxSuggestions.directItem(
+            for: "open ai",
+            searchTemplate: SearchEngine.duckDuckGo.template!,
+            keywordEngines: Self.bangEngines)
+        #expect(item?.title == "Search")
+    }
+
     @Test func droppedTextExtractsFirstLink() {
         #expect(DroppedURL.string(fromText: "Read https://example.com/path now") == "https://example.com/path")
     }
@@ -94,7 +170,8 @@ struct BrowserUtilityTests {
         OmniboxSuggestions.entries(
             matching: query, history: history, openTabs: openTabs,
             now: Self.pinnedNow, limit: limit,
-            searchTemplate: SearchEngine.duckDuckGo.template!)
+            searchTemplate: SearchEngine.duckDuckGo.template!,
+            keywordEngines: [])
     }
 
     @Test func hostPrefixBeatsScatter() {
@@ -636,5 +713,262 @@ struct FaviconLogicTests {
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(TabRecord.self, from: data)
         #expect(decoded.pageZoom == 1.3)
+    }
+
+    // MARK: Desktop site content mode
+
+    @Test func desktopUserAgentOnlyWhenRequested() {
+        #expect(DesktopSiteMode.customUserAgent(requestsDesktop: false) == nil)
+        let agent = DesktopSiteMode.customUserAgent(requestsDesktop: true)
+        #expect(agent?.contains("Macintosh") == true)
+        #expect(agent?.contains("Safari") == true)
+    }
+
+    @Test func tabRecordDecodesRequestsDesktopSite() throws {
+        let json = #"{"id":"\#(UUID().uuidString)","url":"https://a.com","scrollX":0,"scrollY":0,"pageZoom":1.0,"requestsDesktopSite":true}"#
+        let record = try JSONDecoder().decode(TabRecord.self, from: Data(json.utf8))
+        #expect(record.requestsDesktopSite == true)
+    }
+
+    @Test func legacyTabRecordDefaultsRequestsDesktopSiteToFalse() throws {
+        // Pre-DesktopSite snapshots have no requestsDesktopSite key.
+        let json = #"{"id":"\#(UUID().uuidString)","url":"https://a.com","scrollX":0,"scrollY":0,"pageZoom":1.0}"#
+        let record = try JSONDecoder().decode(TabRecord.self, from: Data(json.utf8))
+        #expect(record.requestsDesktopSite == false)
+    }
+
+    @Test func tabRecordRequestsDesktopSiteRoundTrips() throws {
+        let original = TabRecord(id: UUID(), url: "https://a.com", title: "A", requestsDesktopSite: true)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(TabRecord.self, from: data)
+        #expect(decoded.requestsDesktopSite == true)
+    }
+
+    @Test func tileMenuAllowsDesktopSiteToggleWhenContentPresent() {
+        #expect(TileMenuActions(isBlank: false).canRequestDesktopSite == true)
+        #expect(TileMenuActions(isBlank: true).canRequestDesktopSite == false)
+    }
+
+    // MARK: Pane mute
+
+    @Test func tileMenuAllowsMuteToggleOnlyWhenContentPresent() {
+        #expect(TileMenuActions(isBlank: false).canMute == true)
+        #expect(TileMenuActions(isBlank: true).canMute == false)
+    }
+
+    @Test func mutedStateMapsToAudioBitmask() {
+        #expect(WebMediaControl.mutedState(true) == WebMediaControl.audioMutedFlag)
+        #expect(WebMediaControl.mutedState(false) == 0)
+        // The audio flag is the low bit of the page-muted bitmask.
+        #expect(WebMediaControl.audioMutedFlag == 1)
+    }
+
+    @Test func tabRecordDecodesIsMuted() throws {
+        let json = #"{"id":"\#(UUID().uuidString)","url":"https://a.com","scrollX":0,"scrollY":0,"pageZoom":1.0,"requestsDesktopSite":false,"isMuted":true}"#
+        let record = try JSONDecoder().decode(TabRecord.self, from: Data(json.utf8))
+        #expect(record.isMuted == true)
+    }
+
+    @Test func legacyTabRecordDefaultsIsMutedToFalse() throws {
+        // Pre-mute snapshots have no isMuted key; decode must default to false.
+        let json = #"{"id":"\#(UUID().uuidString)","url":"https://a.com","scrollX":0,"scrollY":0,"pageZoom":1.0}"#
+        let record = try JSONDecoder().decode(TabRecord.self, from: Data(json.utf8))
+        #expect(record.isMuted == false)
+    }
+
+    @Test func tabRecordIsMutedRoundTrips() throws {
+        let original = TabRecord(id: UUID(), url: "https://a.com", title: "A", isMuted: true)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(TabRecord.self, from: data)
+        #expect(decoded.isMuted == true)
+    }
+
+    // MARK: - New Tab page: top sites
+
+    private static let ntpNow = Date(timeIntervalSince1970: 1_700_000_000)
+
+    private func ntpEntry(_ url: String, count: Int) -> HistoryEntry {
+        HistoryEntry(url: url, title: nil,
+                     lastVisited: Self.ntpNow.addingTimeInterval(-60),
+                     visitCount: count)
+    }
+
+    @Test func topSitesRankByFrecency() {
+        let history = [
+            ntpEntry("https://rare.com", count: 1),
+            ntpEntry("https://popular.com", count: 50),
+            ntpEntry("https://mid.com", count: 5),
+        ]
+        let top = NewTabLogic.topSites(from: history, now: Self.ntpNow, limit: 10)
+        #expect(top.map(\.url) == [
+            "https://popular.com",
+            "https://mid.com",
+            "https://rare.com",
+        ])
+    }
+
+    @Test func topSitesDedupByHostKeepingStrongest() {
+        let history = [
+            ntpEntry("https://example.com/a", count: 1),
+            ntpEntry("https://www.example.com/b", count: 40),
+            ntpEntry("https://other.com", count: 2),
+        ]
+        let top = NewTabLogic.topSites(from: history, now: Self.ntpNow, limit: 10)
+        // example.com collapses to a single entry (the stronger /b), www stripped.
+        let hosts = top.map { URLCanonicalizer.host($0.url) }
+        #expect(hosts == ["example.com", "other.com"])
+        #expect(top.first?.url == "https://www.example.com/b")
+    }
+
+    @Test func topSitesRespectsLimit() {
+        let history = (0..<20).map { ntpEntry("https://site\($0).com", count: $0 + 1) }
+        let top = NewTabLogic.topSites(from: history, now: Self.ntpNow, limit: 5)
+        #expect(top.count == 5)
+    }
+
+    @Test func topSitesSkipsEmptyHosts() {
+        let history = [
+            ntpEntry("", count: 9),
+            ntpEntry("https://real.com", count: 1),
+        ]
+        let top = NewTabLogic.topSites(from: history, now: Self.ntpNow, limit: 10)
+        #expect(top.map(\.url) == ["https://real.com"])
+    }
+
+    // MARK: - New Tab page: pinned shortcut add/remove/persistence
+
+    @Test func pinnedAddAppendsAndDedupsByCanonicalHost() {
+        var list: [PinnedShortcut] = []
+        list = NewTabLogic.adding(PinnedShortcut(url: "https://a.com", title: "A"), to: list)
+        list = NewTabLogic.adding(PinnedShortcut(url: "https://b.com", title: "B"), to: list)
+        #expect(list.map(\.url) == ["https://a.com", "https://b.com"])
+
+        // Re-pinning the canonical-equivalent URL refreshes title, keeps position.
+        list = NewTabLogic.adding(PinnedShortcut(url: "http://www.a.com", title: "A2"), to: list)
+        #expect(list.count == 2)
+        #expect(list[0].title == "A2")
+    }
+
+    @Test func pinnedAddRejectsEmptyURL() {
+        let list = NewTabLogic.adding(PinnedShortcut(url: "   ", title: "x"), to: [])
+        #expect(list.isEmpty)
+    }
+
+    @Test func pinnedRemoveByCanonicalURL() {
+        var list: [PinnedShortcut] = []
+        list = NewTabLogic.adding(PinnedShortcut(url: "https://a.com"), to: list)
+        list = NewTabLogic.adding(PinnedShortcut(url: "https://b.com"), to: list)
+        list = NewTabLogic.removing(url: "http://www.a.com/", from: list)
+        #expect(list.map(\.url) == ["https://b.com"])
+    }
+
+    @Test func pinnedIsPinnedMatchesCanonical() {
+        let list = NewTabLogic.adding(PinnedShortcut(url: "https://a.com"), to: [])
+        #expect(NewTabLogic.isPinned(url: "http://www.a.com", in: list))
+        #expect(!NewTabLogic.isPinned(url: "https://b.com", in: list))
+    }
+
+    @Test func pinnedShortcutRoundTripsEncoding() throws {
+        let list = [
+            PinnedShortcut(url: "https://a.com", title: "A"),
+            PinnedShortcut(url: "https://b.com", title: nil),
+        ]
+        let data = try JSONEncoder().encode(list)
+        let decoded = try JSONDecoder().decode([PinnedShortcut].self, from: data)
+        #expect(decoded == list)
+        #expect(decoded[1].title == nil)
+    }
+}
+
+// MARK: - Layout presets
+
+@MainActor
+struct LayoutPresetTests {
+
+    private func preset(_ name: String, root: BSPNode? = nil,
+                        tabs: [TabRecord]? = nil) -> LayoutPreset {
+        let id = UUID()
+        let node = root ?? .leaf(tabID: id)
+        let records = tabs ?? [TabRecord(id: id, url: "https://a.com", title: "A")]
+        return LayoutPreset(name: name, root: node,
+                            focusedTabID: records.first?.id, tabs: records)
+    }
+
+    @Test func normalizedNameTrimsAndFallsBack() {
+        #expect(LayoutPresetLogic.normalizedName("  Work  ") == "Work")
+        #expect(LayoutPresetLogic.normalizedName("   ") == "Layout")
+        #expect(LayoutPresetLogic.normalizedName("") == "Layout")
+    }
+
+    @Test func addAppendsPreset() {
+        let p = preset("One")
+        let list = LayoutPresetLogic.adding(p, to: [])
+        #expect(list.map(\.name) == ["One"])
+    }
+
+    @Test func removeByIDDropsOnlyThatPreset() {
+        let a = preset("A")
+        let b = preset("B")
+        let list = LayoutPresetLogic.removing(id: a.id, from: [a, b])
+        #expect(list.map(\.id) == [b.id])
+    }
+
+    @Test func removeUnknownIDIsNoOp() {
+        let a = preset("A")
+        let list = LayoutPresetLogic.removing(id: UUID(), from: [a])
+        #expect(list.map(\.id) == [a.id])
+    }
+
+    @Test func presetRoundTripsEncoding() throws {
+        let id1 = UUID()
+        let id2 = UUID()
+        let root = BSPNode.split(
+            id: UUID(), axis: .vertical, ratio: 0.4,
+            first: .leaf(tabID: id1), second: .leaf(tabID: id2))
+        let records = [
+            TabRecord(id: id1, url: "https://a.com", title: "A", pageZoom: 1.2),
+            TabRecord(id: id2, url: "https://b.com", title: nil),
+        ]
+        let original = LayoutPreset(name: "Split", root: root,
+                                    focusedTabID: id2, tabs: records)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(LayoutPreset.self, from: data)
+        #expect(decoded == original)
+        #expect(decoded.root.tabIDs() == [id1, id2])
+        #expect(decoded.focusedTabID == id2)
+        #expect(decoded.tabs.first(where: { $0.id == id1 })?.pageZoom == 1.2)
+    }
+
+    @Test func decodeToleratesMissingOptionalFields() throws {
+        // Old preset files may lack id/name/focusedTabID/tabs.
+        let json = """
+        {"root":{"leaf":{"tabID":"\(UUID().uuidString)"}}}
+        """
+        let decoded = try JSONDecoder().decode(
+            LayoutPreset.self, from: Data(json.utf8))
+        #expect(decoded.name == "Layout")
+        #expect(decoded.tabs.isEmpty)
+        #expect(decoded.focusedTabID == nil)
+    }
+
+    @Test func roundTripPreservesStructureWithDuplicateLeafIDs() {
+        // A snapshot with a repeated leaf id: dedup rewrites the second leaf's id
+        // but must preserve the tree shape (one split, two leaves).
+        let dup = UUID()
+        let root = BSPNode.split(
+            id: UUID(), axis: .horizontal, ratio: 0.5,
+            first: .leaf(tabID: dup), second: .leaf(tabID: dup))
+        var seen = Set<UUID>()
+        let deduped = root.deduplicatingLeafIDs(seen: &seen)
+        let ids = deduped.tabIDs()
+        #expect(ids.count == 2)
+        #expect(Set(ids).count == 2)            // ids made unique
+        #expect(ids.first == dup)               // first occurrence kept
+        if case .split(_, let axis, let ratio, _, _) = deduped {
+            #expect(axis == .horizontal)
+            #expect(ratio == 0.5)
+        } else {
+            Issue.record("expected a split at the root")
+        }
     }
 }

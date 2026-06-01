@@ -4,6 +4,8 @@ import SwiftUI
 struct zzApp: App {
     @State private var history = HistoryStore()
     @State private var favicons = FaviconStore()
+    @State private var pinned = PinnedShortcutStore()
+    @State private var layouts = LayoutPresetStore()
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
@@ -11,6 +13,8 @@ struct zzApp: App {
             ContentView(windowID: windowID)
                 .environment(history)
                 .environment(favicons)
+                .environment(pinned)
+                .environment(layouts)
         } defaultValue: {
             WindowID()
         }

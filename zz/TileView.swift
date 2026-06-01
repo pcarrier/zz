@@ -12,6 +12,7 @@ struct TileView: View {
     let tabID: UUID
 
     @Environment(BrowserStore.self) private var store
+    @Environment(PinnedShortcutStore.self) private var pinned
 
     @State private var dropState = TileDropState()
 
@@ -30,7 +31,10 @@ struct TileView: View {
         let active = store.focusedTabID == tabID && store.selectedGroupID == nil
         Group {
             if tab.isBlank {
-                EmptyTileState { store.focus(tabID); store.focusURLBar() }
+                NewTabPageView(
+                    onOpen: { url in store.focus(tabID); tab.load(url) },
+                    onFocus: { store.focus(tabID); store.focusURLBar() }
+                )
             } else {
                 HostedWebView(webView: tab.webView,
                               onInteraction: { store.focus(tabID) },
@@ -64,6 +68,13 @@ struct TileView: View {
                 }
                 .frame(height: 2)
                 .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if let symbol = mediaIndicatorSymbol(for: tab) {
+                MediaIndicator(systemImage: symbol)
+                    .padding(8)
+                    .allowsHitTesting(false)
             }
         }
         .overlay {
@@ -123,6 +134,40 @@ struct TileView: View {
             }
         }
 
+        if actions.canPin {
+            if pinned.isPinned(url: tab.currentURL) {
+                Button {
+                    pinned.unpin(url: tab.currentURL)
+                } label: {
+                    Label("Unpin from New Tab", systemImage: "pin.slash")
+                }
+            } else {
+                Button {
+                    pinned.pin(url: tab.currentURL, title: tab.title)
+                } label: {
+                    Label("Pin to New Tab", systemImage: "pin")
+                }
+            }
+        }
+
+        if actions.canRequestDesktopSite {
+            Toggle(isOn: Binding(
+                get: { tab.requestsDesktopSite },
+                set: { tab.requestsDesktopSite = $0 }
+            )) {
+                Label("Request Desktop Site", systemImage: "desktopcomputer")
+            }
+        }
+
+        if actions.canMute {
+            Toggle(isOn: Binding(
+                get: { tab.isMuted },
+                set: { tab.isMuted = $0 }
+            )) {
+                Label("Mute Tile", systemImage: tab.isMuted ? "speaker.slash" : "speaker.wave.2")
+            }
+        }
+
         if actions.canPark {
             Button {
                 store.park(tabID)
@@ -140,6 +185,16 @@ struct TileView: View {
         } label: {
             Label("Close", systemImage: "xmark")
         }
+    }
+
+    /// SF Symbol for the small media overlay, or nil when nothing should show.
+    /// A muted tile always shows the slashed speaker; an unmuted tile shows the
+    /// audible speaker only while it is actually playing audio (the `_isPlayingAudio`
+    /// SPI; stays false when that SPI is unavailable, so the indicator is simply absent).
+    private func mediaIndicatorSymbol(for tab: Tab) -> String? {
+        if tab.isMuted { return "speaker.slash.fill" }
+        if tab.isPlayingAudio { return "speaker.wave.2.fill" }
+        return nil
     }
 
     private func copyURL(_ urlString: String) {
@@ -173,6 +228,9 @@ struct TileMenuActions: Equatable {
     let canCopyURL: Bool
     let canReload: Bool
     let canPark: Bool
+    let canRequestDesktopSite: Bool
+    let canMute: Bool
+    let canPin: Bool
     /// Close is always available, so it has no stored flag.
 
     init(isBlank: Bool) {
@@ -181,6 +239,21 @@ struct TileMenuActions: Equatable {
         canCopyURL = hasContent
         canReload = hasContent
         canPark = hasContent
+        canRequestDesktopSite = hasContent
+        canMute = hasContent
+        canPin = hasContent
+    }
+}
+
+private struct MediaIndicator: View {
+    let systemImage: String
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(6)
+            .background(.black.opacity(0.55), in: Circle())
     }
 }
 

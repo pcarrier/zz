@@ -34,7 +34,7 @@ extension Color {
     }
 }
 
-enum SiteVisual {
+nonisolated enum SiteVisual {
     static func host(for url: String) -> String {
         URL(string: url)?.host(percentEncoded: false)
         ?? URL(string: "https://" + url)?.host(percentEncoded: false)

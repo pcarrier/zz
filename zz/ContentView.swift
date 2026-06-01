@@ -22,10 +22,14 @@ private struct BrowserScene: View {
     @State private var sidebarPresented: Bool = false
     @State private var settingsPresented: Bool = false
     @State private var historyPresented: Bool = false
+    @State private var saveLayoutPromptPresented: Bool = false
+    @State private var saveLayoutName: String = ""
     @FocusState private var urlFocused: Bool
 
     @Environment(HistoryStore.self) private var history
     @Environment(FaviconStore.self) private var favicons
+    @Environment(PinnedShortcutStore.self) private var pinned
+    @Environment(LayoutPresetStore.self) private var layouts
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -102,10 +106,14 @@ private struct BrowserScene: View {
                 sidebarPresented: $sidebarPresented,
                 settingsPresented: $settingsPresented,
                 historyPresented: $historyPresented,
+                onSaveLayout: { saveLayoutName = ""; saveLayoutPromptPresented = true },
+                onApplyLayout: { store.applyLayoutPreset($0) },
+                onDeleteLayout: { layouts.delete(id: $0) },
                 onCommit: commit,
                 onSelect: selectSuggestion
             )
             .environment(store)
+            .environment(layouts)
         }
         .statusBarHiddenIfAvailable()
         .onChange(of: store.focusedTabID) { _, _ in
@@ -152,12 +160,24 @@ private struct BrowserScene: View {
                 .environment(history)
                 .environment(favicons)
         }
+        .alert("Save Layout", isPresented: $saveLayoutPromptPresented) {
+            TextField("Layout name", text: $saveLayoutName)
+            Button("Cancel", role: .cancel) { }
+            Button("Save") {
+                let name = LayoutPresetLogic.normalizedName(saveLayoutName)
+                layouts.add(store.captureLayoutPreset(named: name))
+            }
+        } message: {
+            Text("Name this pane arrangement so you can restore it later.")
+        }
         .task { draft = store.focusedTab?.currentURL ?? "" }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
                 store.flushSave()
                 history.flushSave()
                 favicons.flushSave()
+                pinned.flushSave()
+                layouts.flushSave()
             }
         }
         .onOpenURL { url in
