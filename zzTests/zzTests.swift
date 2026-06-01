@@ -478,12 +478,11 @@ struct BrowserUtilityTests {
 @MainActor
 struct FaviconLogicTests {
 
-    @Test func candidateURLsTryDirectThenGoogleFallback() {
+    @Test func candidateURLsUseOnlySiteFavicon() {
         let urls = FaviconLogic.candidateURLs(host: "example.com").map(\.absoluteString)
-        #expect(urls == [
-            "https://example.com/favicon.ico",
-            "https://www.google.com/s2/favicons?domain=example.com&sz=64"
-        ])
+        // Only the site's own favicon.ico -- no third-party (e.g. Google s2) fallback
+        // that would leak the visited hostname.
+        #expect(urls == ["https://example.com/favicon.ico"])
     }
 
     @Test func candidateURLsEmptyHostYieldsNothing() {

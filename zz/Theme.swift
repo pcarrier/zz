@@ -63,20 +63,13 @@ nonisolated private let faviconLogger = Logger(
 /// filename for a host, decoding bytes to a platform image, and LRU eviction.
 /// Kept free of any actor/state so they are unit-testable and Sendable-safe.
 nonisolated enum FaviconLogic {
-    /// Ordered candidate URLs to try for a host: the site's own favicon.ico
-    /// first, then the Google s2 fallback. Returns empty for an empty host.
+    /// Candidate URL(s) to try for a host: only the site's own favicon.ico, so
+    /// no hostname is ever leaked to a third party. Returns empty for an empty host.
     static func candidateURLs(host: String) -> [URL] {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmed.isEmpty else { return [] }
-        var urls: [URL] = []
-        if let direct = URL(string: "https://\(trimmed)/favicon.ico") {
-            urls.append(direct)
-        }
-        if let escaped = trimmed.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed),
-           let fallback = URL(string: "https://www.google.com/s2/favicons?domain=\(escaped)&sz=64") {
-            urls.append(fallback)
-        }
-        return urls
+        guard !trimmed.isEmpty,
+              let direct = URL(string: "https://\(trimmed)/favicon.ico") else { return [] }
+        return [direct]
     }
 
     /// Stable, filesystem-safe filename for a host's cached image. Hashing keeps
