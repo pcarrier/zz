@@ -159,12 +159,13 @@ struct TileView: View {
             }
         }
 
-        if actions.canMute {
+        if actions.canSuspendMedia {
             Toggle(isOn: Binding(
-                get: { tab.isMuted },
-                set: { tab.isMuted = $0 }
+                get: { tab.isMediaSuspended },
+                set: { tab.isMediaSuspended = $0 }
             )) {
-                Label("Mute Tile", systemImage: tab.isMuted ? "speaker.slash" : "speaker.wave.2")
+                Label(tab.isMediaSuspended ? "Resume Media" : "Suspend Media",
+                      systemImage: tab.isMediaSuspended ? "play.circle" : "pause.circle")
             }
         }
 
@@ -188,13 +189,11 @@ struct TileView: View {
     }
 
     /// SF Symbol for the small media overlay, or nil when nothing should show.
-    /// A muted tile always shows the slashed speaker; an unmuted tile shows the
-    /// audible speaker only while it is actually playing audio (the `_isPlayingAudio`
-    /// SPI; stays false when that SPI is unavailable, so the indicator is simply absent).
+    /// Reflects the user-controlled media-suspension state (no private playback
+    /// SPI): a suspended pane shows a pause badge so it's clear which pane was
+    /// silenced.
     private func mediaIndicatorSymbol(for tab: Tab) -> String? {
-        if tab.isMuted { return "speaker.slash.fill" }
-        if tab.isPlayingAudio { return "speaker.wave.2.fill" }
-        return nil
+        tab.isMediaSuspended ? "pause.circle.fill" : nil
     }
 
     private func copyURL(_ urlString: String) {
@@ -229,7 +228,7 @@ struct TileMenuActions: Equatable {
     let canReload: Bool
     let canPark: Bool
     let canRequestDesktopSite: Bool
-    let canMute: Bool
+    let canSuspendMedia: Bool
     let canPin: Bool
     /// Close is always available, so it has no stored flag.
 
@@ -240,7 +239,7 @@ struct TileMenuActions: Equatable {
         canReload = hasContent
         canPark = hasContent
         canRequestDesktopSite = hasContent
-        canMute = hasContent
+        canSuspendMedia = hasContent
         canPin = hasContent
     }
 }

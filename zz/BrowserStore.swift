@@ -413,7 +413,7 @@ final class BrowserStore {
                               scrollOffset: CGPoint(x: record.scrollX, y: record.scrollY),
                               pageZoom: record.pageZoom,
                               requestsDesktopSite: record.requestsDesktopSite,
-                              isMuted: record.isMuted,
+                              mediaSuspended: record.mediaSuspended,
                               history: history)
                 loadedTabs[tab.id] = tab
             }
@@ -1063,7 +1063,7 @@ final class BrowserStore {
                           scrollOffset: CGPoint(x: record.scrollX, y: record.scrollY),
                           pageZoom: record.pageZoom,
                           requestsDesktopSite: record.requestsDesktopSite,
-                          isMuted: record.isMuted,
+                          mediaSuspended: record.mediaSuspended,
                           history: history)
             attachCallbacks(to: tab)
             loadedTabs[tab.id] = tab

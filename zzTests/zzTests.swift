@@ -749,38 +749,39 @@ struct FaviconLogicTests {
         #expect(TileMenuActions(isBlank: true).canRequestDesktopSite == false)
     }
 
-    // MARK: Pane mute
+    // MARK: Pane media suspension
 
-    @Test func tileMenuAllowsMuteToggleOnlyWhenContentPresent() {
-        #expect(TileMenuActions(isBlank: false).canMute == true)
-        #expect(TileMenuActions(isBlank: true).canMute == false)
+    @Test func tileMenuAllowsSuspendMediaOnlyWhenContentPresent() {
+        #expect(TileMenuActions(isBlank: false).canSuspendMedia == true)
+        #expect(TileMenuActions(isBlank: true).canSuspendMedia == false)
     }
 
-    @Test func mutedStateMapsToAudioBitmask() {
-        #expect(WebMediaControl.mutedState(true) == WebMediaControl.audioMutedFlag)
-        #expect(WebMediaControl.mutedState(false) == 0)
-        // The audio flag is the low bit of the page-muted bitmask.
-        #expect(WebMediaControl.audioMutedFlag == 1)
-    }
-
-    @Test func tabRecordDecodesIsMuted() throws {
-        let json = #"{"id":"\#(UUID().uuidString)","url":"https://a.com","scrollX":0,"scrollY":0,"pageZoom":1.0,"requestsDesktopSite":false,"isMuted":true}"#
+    @Test func tabRecordDecodesMediaSuspended() throws {
+        let json = #"{"id":"\#(UUID().uuidString)","url":"https://a.com","scrollX":0,"scrollY":0,"pageZoom":1.0,"requestsDesktopSite":false,"mediaSuspended":true}"#
         let record = try JSONDecoder().decode(TabRecord.self, from: Data(json.utf8))
-        #expect(record.isMuted == true)
+        #expect(record.mediaSuspended == true)
     }
 
-    @Test func legacyTabRecordDefaultsIsMutedToFalse() throws {
-        // Pre-mute snapshots have no isMuted key; decode must default to false.
+    @Test func legacyIsMutedKeyMapsToMediaSuspended() throws {
+        // Snapshots from the earlier SPI-mute build used the "isMuted" key; it must
+        // still map onto mediaSuspended for a clean upgrade.
+        let json = #"{"id":"\#(UUID().uuidString)","url":"https://a.com","scrollX":0,"scrollY":0,"pageZoom":1.0,"isMuted":true}"#
+        let record = try JSONDecoder().decode(TabRecord.self, from: Data(json.utf8))
+        #expect(record.mediaSuspended == true)
+    }
+
+    @Test func legacyTabRecordDefaultsMediaSuspendedToFalse() throws {
+        // Older snapshots have neither key; decode must default to false.
         let json = #"{"id":"\#(UUID().uuidString)","url":"https://a.com","scrollX":0,"scrollY":0,"pageZoom":1.0}"#
         let record = try JSONDecoder().decode(TabRecord.self, from: Data(json.utf8))
-        #expect(record.isMuted == false)
+        #expect(record.mediaSuspended == false)
     }
 
-    @Test func tabRecordIsMutedRoundTrips() throws {
-        let original = TabRecord(id: UUID(), url: "https://a.com", title: "A", isMuted: true)
+    @Test func tabRecordMediaSuspendedRoundTrips() throws {
+        let original = TabRecord(id: UUID(), url: "https://a.com", title: "A", mediaSuspended: true)
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(TabRecord.self, from: data)
-        #expect(decoded.isMuted == true)
+        #expect(decoded.mediaSuspended == true)
     }
 
     // MARK: - New Tab page: top sites
