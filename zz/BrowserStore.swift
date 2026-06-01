@@ -5,7 +5,7 @@ import OSLog
 import SwiftUI
 import WebKit
 
-private let persistenceLogger = Logger(
+nonisolated private let persistenceLogger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "surf.zz",
     category: "Persistence"
 )
@@ -43,7 +43,11 @@ enum BSPNode: Codable, Identifiable, Hashable {
             }
             return .leaf(tabID: UUID())
         case .split(let id, let axis, let ratio, let a, let b):
-            return .split(id: id, axis: axis, ratio: ratio,
+            // Dedup split ids in the same pre-order walk: a snapshot with a repeated
+            // split UUID makes split-id-keyed ops (ratio/axis/equalize/selectGroup/
+            // divider drag) short-circuit on the first match and target the wrong node.
+            let newID = seen.insert(id).inserted ? id : UUID()
+            return .split(id: newID, axis: axis, ratio: ratio,
                           first: a.deduplicatingLeafIDs(seen: &seen),
                           second: b.deduplicatingLeafIDs(seen: &seen))
         }
@@ -963,21 +967,33 @@ final class BrowserStore {
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
-            Self.write(snapshot, to: url)
+            // Encode on the main actor (WindowSnapshot's Codable conformance is
+            // main-actor-isolated, and the encode is cheap + coalesced by the
+            // debounce), then hand the bytes to a nonisolated writer so the
+            // unbounded atomic disk write runs OFF the main actor.
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            await Self.writeDataOffMain(data, to: url)
         }
     }
 
     func flushSave() {
         saveTask?.cancel()
-        Self.write(currentSnapshot(), to: Self.snapshotFile(for: windowID))
+        // Synchronous on purpose: flushSave runs at scenePhase background/terminate
+        // and must finish before the process is suspended, so it cannot hand off to
+        // a task that may never get scheduled.
+        guard let data = try? JSONEncoder().encode(currentSnapshot()) else { return }
+        Self.writeData(data, to: Self.snapshotFile(for: windowID))
     }
 
-    private static func write(_ snapshot: WindowSnapshot, to url: URL) {
+    nonisolated private static func writeDataOffMain(_ data: Data, to url: URL) async {
+        writeData(data, to: url)
+    }
+
+    nonisolated private static func writeData(_ data: Data, to url: URL) {
         do {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(snapshot)
             try data.write(to: url, options: .atomic)
         } catch {
             persistenceLogger.error("BrowserStore save failed: \(error.localizedDescription, privacy: .public)")
@@ -1598,7 +1614,7 @@ enum OmniboxSuggestions {
 
     /// Fully deterministic comparison-key chain (never floats alone):
     /// score desc, visitCount desc, lastVisited desc, canonicalLength asc, key asc.
-    private static func isHigher(_ a: Scored, _ b: Scored) -> Bool {
+    nonisolated private static func isHigher(_ a: Scored, _ b: Scored) -> Bool {
         if a.score != b.score { return a.score > b.score }
         if a.visitCount != b.visitCount { return a.visitCount > b.visitCount }
         if a.lastVisited != b.lastVisited { return a.lastVisited > b.lastVisited }
@@ -1697,28 +1713,34 @@ final class HistoryStore {
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
-            Self.write(snapshot)
+            // Encode on main (debounce coalesces it), write off main.
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            await Self.writeDataOffMain(data)
         }
     }
 
     func flushSave() {
         saveTask?.cancel()
-        Self.write(entries)
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        Self.writeData(data)
     }
 
-    private static func write(_ entries: [HistoryEntry]) {
+    nonisolated private static func writeDataOffMain(_ data: Data) async {
+        writeData(data)
+    }
+
+    nonisolated private static func writeData(_ data: Data) {
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(entries)
             try data.write(to: fileURL, options: .atomic)
         } catch {
             persistenceLogger.error("HistoryStore save failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private static var fileURL: URL {
+    nonisolated private static var fileURL: URL {
         URL.documentsDirectory
             .appending(path: "zz", directoryHint: .isDirectory)
             .appending(path: "history.json")

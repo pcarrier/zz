@@ -250,9 +250,7 @@ private struct ShortcutLayer: View {
             shortcut("Reload",           "r", action: store.reloadFocused)
             shortcut("Force Reload",     "r", modifiers: [.command, .shift],
                      action: store.forceReloadFocused)
-            #if !os(macOS)
             shortcut("Find on Page",     "f", action: store.findInFocused)
-            #endif
             shortcut("Back",             "[", action: store.backFocused)
             shortcut("Forward",          "]", action: store.forwardFocused)
             if !urlFocused {
@@ -278,10 +276,15 @@ private struct ShortcutLayer: View {
             shortcut("Rotate Group", "r", modifiers: [.command, .option, .control],
                      action: store.rotateSelectedGroup)
 
-            arrow("Focus Up",    .upArrow,    .up)
-            arrow("Focus Down",  .downArrow,  .down)
-            arrow("Focus Left",  .leftArrow,  .left)
-            arrow("Focus Right", .rightArrow, .right)
+            if !urlFocused {
+                // Gate directional pane focus behind !urlFocused (like Back/Forward
+                // arrows above) so arrow keys while editing the URL bar don't silently
+                // move pane focus out from under the active edit.
+                arrow("Focus Up",    .upArrow,    .up)
+                arrow("Focus Down",  .downArrow,  .down)
+                arrow("Focus Left",  .leftArrow,  .left)
+                arrow("Focus Right", .rightArrow, .right)
+            }
         }
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)

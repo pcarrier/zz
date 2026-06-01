@@ -82,6 +82,8 @@ struct SplitHandle: View {
     var onEnd: () -> Void = {}
 
     @State private var lastEmitTime: CFTimeInterval = 0
+    @State private var didBegin = false
+    @GestureState private var gestureActive = false
 
     init(axis: BSPNode.Axis,
          thickness: CGFloat = 12,
@@ -114,12 +116,20 @@ struct SplitHandle: View {
             .gesture(
                 // Global coordinates avoid feedback as the divider moves.
                 DragGesture(minimumDistance: 2, coordinateSpace: .global)
+                    .updating($gestureActive) { _, state, _ in state = true }
                     .onChanged { value in
                         // Throttle WKWebView relayout during drag.
                         let now = CACurrentMediaTime()
                         if now - lastEmitTime < 1.0 / 60.0 { return }
                         lastEmitTime = now
-                        onBegin()
+                        // Capture the baseline exactly once per gesture. onChanged
+                        // fires every frame with a cumulative translation, so calling
+                        // onBegin() each frame would re-capture an already-moved ratio
+                        // and double-count the translation (divider runaway).
+                        if !didBegin {
+                            didBegin = true
+                            onBegin()
+                        }
                         let cumulative = axis == .horizontal
                             ? value.translation.height
                             : value.translation.width
@@ -132,8 +142,15 @@ struct SplitHandle: View {
                             : value.translation.width
                         onTranslate(cumulative)
                         onEnd()
+                        didBegin = false
                     }
             )
+            .onChange(of: gestureActive) { _, active in
+                // @GestureState resets to false on end OR cancellation, so this
+                // clears didBegin even when .onEnded is dropped (gesture preempted),
+                // ensuring the next gesture re-captures a fresh baseline.
+                if !active { didBegin = false }
+            }
             #if os(macOS)
             .onHover { hovering in
                 if hovering {

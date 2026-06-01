@@ -252,6 +252,14 @@ final class Tab {
     func find() {
         #if !os(macOS)
         webView.findInteraction?.presentFindNavigator(showingReplace: false)
+        #else
+        // WKWebView participates in the text-finder responder chain and shows its
+        // built-in find bar. Make the web view first responder, then send the
+        // showFindInterface action; the sender's tag selects the action.
+        webView.window?.makeFirstResponder(webView)
+        let item = NSMenuItem()
+        item.tag = NSTextFinder.Action.showFindInterface.rawValue
+        NSApp.sendAction(#selector(NSResponder.performTextFinderAction(_:)), to: nil, from: item)
         #endif
     }
 
@@ -320,6 +328,16 @@ final class Tab {
         #endif
     }
 
+    func handleNavigationFailure() {
+        // didFinishNavigation is the only other place these flags are cleared, so a
+        // navigation that fails (DNS/connection error, error page, cancelled load,
+        // user Stop) would otherwise leave them stuck true -- permanently suppressing
+        // scroll-to-zero recording and, for a failed restore load, history recording.
+        isNavigationInFlight = false
+        isRestoring = false
+        pendingScrollRestore = nil
+    }
+
     private func notifyPersistenceChanged() {
         onPersistenceChange?()
     }
@@ -331,7 +349,15 @@ final class Tab {
         }
         #endif
         isNavigationInFlight = true
-        webView.reload()
+        // reload() is a no-op when there is no committed back-forward item (e.g. the
+        // process died during the initial provisional load), which would leave the
+        // pane blank and isNavigationInFlight stuck true. Re-issue the original load
+        // in that case so recovery actually navigates.
+        if webView.url == nil, let target = URLNormalizer.resolve(currentURL) {
+            webView.load(URLRequest(url: target))
+        } else {
+            webView.reload()
+        }
     }
 
     func respondToHTTPAuthenticationChallenge(
@@ -434,7 +460,15 @@ final class Tab {
             field.textContentType = .password
             field.isSecureTextEntry = true
         }
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+        // Capture self weakly so an open alert does not keep this Tab (and its
+        // WKWebView) alive after the pane is closed. completionHandler is captured
+        // directly as a fallback: if self is gone, pendingHTTPAuthCompletions died
+        // with it, so answer WebKit here to avoid a hung challenge.
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            guard let self else {
+                completionHandler(.cancelAuthenticationChallenge, nil)
+                return
+            }
             self.completeHTTPAuthChallenge(
                 key: key,
                 protectionSpace: protectionSpace,
@@ -442,9 +476,13 @@ final class Tab {
                 credential: nil
             )
         })
-        alert.addAction(UIAlertAction(title: "Sign In", style: .default) { [weak alert] _ in
+        alert.addAction(UIAlertAction(title: "Sign In", style: .default) { [weak self, weak alert] _ in
             let username = alert?.textFields?.first?.text ?? ""
             let password = alert?.textFields?.dropFirst().first?.text ?? ""
+            guard let self else {
+                completionHandler(.cancelAuthenticationChallenge, nil)
+                return
+            }
             // Treat an empty username/password as a cancel so a fumbled dialog
             // does not persist an empty credential that auto-fails each restart.
             guard !username.isEmpty || !password.isEmpty else {
@@ -562,11 +600,17 @@ final class Tab {
             },
             webView.observe(\.title, options: [.new]) { [weak self] view, _ in
                 let t = view.title
+                // Capture the URL atomically with the title: the separate url
+                // observer's Task may not have updated self.currentURL yet, so
+                // recording against self.currentURL could attribute this title to
+                // the previous page. view.url is the page the title belongs to.
+                let urlString = view.url?.absoluteString
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.title = t
-                    if !self.currentURL.isEmpty, self.currentURL != "about:blank", !self.isRestoring {
-                        self.history?.record(url: self.currentURL, title: t)
+                    let recordURL = urlString ?? self.currentURL
+                    if !recordURL.isEmpty, recordURL != "about:blank", !self.isRestoring {
+                        self.history?.record(url: recordURL, title: t)
                     }
                     self.notifyPersistenceChanged()
                 }
@@ -600,6 +644,11 @@ final class Tab {
                     // settled, a genuine user scroll back to (0,0) is recorded.
                     if offset == .zero, self.isNavigationInFlight { return }
                     self.lastScrollOffset = offset
+                    // Schedule a debounced snapshot save so the scroll position is
+                    // actually persisted; otherwise scrollX/scrollY only get written
+                    // when some unrelated event happens to trigger a save, and the
+                    // restored offset is usually stale (often pre-scroll .zero).
+                    self.notifyPersistenceChanged()
                 }
             }
         )
@@ -891,6 +940,20 @@ private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor [weak owner] in
             owner?.didFinishNavigation()
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        Task { @MainActor [weak owner] in
+            owner?.handleNavigationFailure()
+        }
+    }
+
+    func webView(_ webView: WKWebView,
+                 didFailProvisionalNavigation navigation: WKNavigation!,
+                 withError error: Error) {
+        Task { @MainActor [weak owner] in
+            owner?.handleNavigationFailure()
         }
     }
 
