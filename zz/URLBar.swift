@@ -121,6 +121,7 @@ struct SuggestionList: View {
             }
             .frame(maxHeight: maxVisibleHeight)
             .scrollIndicators(.automatic)
+            .preservesKeyboardOnScroll()
             .onChange(of: selectedSuggestionID) { _, _ in
                 scrollSelectionIntoView(proxy)
             }
@@ -205,7 +206,11 @@ private struct SuggestionRow: View {
         .buttonStyle(.plain)
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { _ in selectOnce() }
+                .onEnded { value in
+                    if value.translation.isTapSized {
+                        selectOnce()
+                    }
+                }
         )
     }
 
@@ -293,5 +298,22 @@ private struct SuggestionRowFramePreferenceKey: PreferenceKey {
     static func reduce(value: inout [String: CGRect],
                        nextValue: () -> [String: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func preservesKeyboardOnScroll() -> some View {
+        #if os(iOS)
+        scrollDismissesKeyboard(.never)
+        #else
+        self
+        #endif
+    }
+}
+
+private extension CGSize {
+    var isTapSized: Bool {
+        abs(width) <= 8 && abs(height) <= 8
     }
 }

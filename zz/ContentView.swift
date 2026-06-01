@@ -57,7 +57,7 @@ private struct BrowserScene: View {
             mainContent
                 .environment(store)
 
-            if !matches.isEmpty {
+            if urlFocused && !matches.isEmpty {
                 SuggestionList(
                     suggestions: matches,
                     selectedIndex: selectedSuggestionIndex,
@@ -108,6 +108,7 @@ private struct BrowserScene: View {
                 onSaveLayout: { saveLayoutName = ""; saveLayoutPromptPresented = true },
                 onApplyLayout: { store.applyLayoutPreset($0) },
                 onDeleteLayout: { layouts.delete(id: $0) },
+                onOutsideURLBarInteraction: dismissOmnibox,
                 onCommit: commit,
                 onSelect: selectSuggestion
             )
@@ -146,7 +147,10 @@ private struct BrowserScene: View {
             }
         }
         .sheet(isPresented: $sidebarPresented) {
-            SidebarView { _ in sidebarPresented = false }
+            SidebarView(
+                onSelect: { _ in sidebarPresented = false },
+                onInteraction: dismissOmnibox
+            )
                 .environment(store)
                 .environment(favicons)
         }
@@ -195,11 +199,14 @@ private struct BrowserScene: View {
                 if !store.parked.isEmpty && store.zoomedTabID == nil {
                     SplitHandle(
                         axis: .vertical,
-                        onBegin:     { store.beginSidebarDrag() },
+                        onBegin:     {
+                            dismissOmnibox()
+                            store.beginSidebarDrag()
+                        },
                         onTranslate: { t in store.updateSidebarDrag(translation: t) },
                         onEnd:       { store.endSidebarDrag() }
                     )
-                    SidebarView()
+                    SidebarView(onInteraction: dismissOmnibox)
                         .frame(width: store.sidebarWidth)
                         .clipped()
                 }
@@ -210,9 +217,10 @@ private struct BrowserScene: View {
     @ViewBuilder
     private var mainPaneContent: some View {
         if let zoomedID = store.zoomedTabID, store.tab(zoomedID) != nil {
-            TileView(tabID: zoomedID).id(zoomedID)
+            TileView(tabID: zoomedID, onOutsideURLBarInteraction: dismissOmnibox)
+                .id(zoomedID)
         } else {
-            BSPView(node: store.root)
+            BSPView(node: store.root, onOutsideURLBarInteraction: dismissOmnibox)
         }
     }
 
@@ -250,6 +258,14 @@ private struct BrowserScene: View {
         case .load(let url):
             commit(url)
         }
+    }
+
+    private func dismissOmnibox() {
+        guard urlFocused || selectedSuggestionIndex != nil else { return }
+        urlFocused = false
+        selectedSuggestionIndex = nil
+        urlEditingTabID = nil
+        draft = store.focusedTab?.currentURL ?? ""
     }
 
     private func tabIDForCommit() -> UUID? {

@@ -10,6 +10,7 @@ import AppKit
 
 struct TileView: View {
     let tabID: UUID
+    var onOutsideURLBarInteraction: () -> Void = {}
 
     @Environment(BrowserStore.self) private var store
 
@@ -36,7 +37,10 @@ struct TileView: View {
                 }
             } else {
                 HostedWebView(webView: tab.webView,
-                              onInteraction: { store.focus(tabID) },
+                              onInteraction: {
+                                  store.focus(tabID)
+                                  onOutsideURLBarInteraction()
+                              },
                               dropHandler: PaneDropHandler(
                                 update: { location, size in
                                   dropState.update(location: location, size: size)

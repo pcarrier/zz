@@ -5,6 +5,7 @@ private let sidebarReorderCoordinateSpace = "SidebarReorderCoordinateSpace"
 
 struct SidebarView: View {
     var onSelect: (UUID) -> Void = { _ in }
+    var onInteraction: () -> Void = {}
 
     @Environment(BrowserStore.self) private var store
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -30,7 +31,8 @@ struct SidebarView: View {
                                 sidebarWidth: sidebarWidth,
                                 index: idx,
                                 reorderInsertionIndex: reorderInsertionIndex,
-                                onSelect: onSelect
+                                onSelect: onSelect,
+                                onInteraction: onInteraction
                             )
                         }
                     }
@@ -74,6 +76,7 @@ private struct SidebarParkedRow: View {
     let index: Int
     let reorderInsertionIndex: Int?
     let onSelect: (UUID) -> Void
+    let onInteraction: () -> Void
 
     @State private var swipeOffset: CGFloat = 0
 
@@ -109,11 +112,13 @@ private struct SidebarParkedRow: View {
                                store.isSidebarPreviewHost(tabID)
                            })
             .onTapGesture {
+                onInteraction()
                 store.swapParkedWithFocused(tabID)
                 onSelect(tabID)
             }
             .contextMenu {
                 Button(role: .destructive) {
+                    onInteraction()
                     store.discardParked(tabID)
                 } label: {
                     Label("Close", systemImage: "xmark")
@@ -147,6 +152,7 @@ private struct SidebarParkedRow: View {
         DragGesture(minimumDistance: 14, coordinateSpace: .local)
             .onChanged { value in
                 guard isRightSwipe(value) else { return }
+                onInteraction()
                 swipeOffset = min(value.translation.width, CGFloat(sidebarWidth))
             }
             .onEnded { value in

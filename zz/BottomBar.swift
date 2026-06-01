@@ -17,6 +17,7 @@ struct BottomBar: View {
     let onSaveLayout: () -> Void
     let onApplyLayout: (LayoutPreset) -> Void
     let onDeleteLayout: (UUID) -> Void
+    let onOutsideURLBarInteraction: () -> Void
     let onCommit: (String) -> Void
     let onSelect: (OmniboxItem) -> Void
 
@@ -59,11 +60,12 @@ struct BottomBar: View {
                     historyPresented: $historyPresented,
                     onSaveLayout: onSaveLayout,
                     onApplyLayout: onApplyLayout,
-                    onDeleteLayout: onDeleteLayout
+                    onDeleteLayout: onDeleteLayout,
+                    onOutsideURLBarInteraction: onOutsideURLBarInteraction
                 )
                 BarIconButton(name: "sidebar.right",
                               enabled: !store.parked.isEmpty,
-                              action: { sidebarPresented = true },
+                              action: { runOutsideURLBarInteraction { sidebarPresented = true } },
                               help: "Sidebar")
             } else {
                 actionButtons(tab: tab)
@@ -87,7 +89,8 @@ struct BottomBar: View {
                 icon: "chevron.backward",
                 help: "Back (⌘[)",
                 primaryAction: { tab?.goBack() },
-                enabled: tab?.canGoBack ?? false
+                enabled: tab?.canGoBack ?? false,
+                onInteraction: onOutsideURLBarInteraction
             )
             HistoryMenu(
                 tab: tab,
@@ -95,9 +98,10 @@ struct BottomBar: View {
                 icon: "chevron.forward",
                 help: "Forward (⌘])",
                 primaryAction: { tab?.goForward() },
-                enabled: tab?.canGoForward ?? false
+                enabled: tab?.canGoForward ?? false,
+                onInteraction: onOutsideURLBarInteraction
             )
-            ReloadControl(tab: tab)
+            ReloadControl(tab: tab, onInteraction: onOutsideURLBarInteraction)
         }
     }
 
@@ -108,19 +112,31 @@ struct BottomBar: View {
                             ? "arrow.up.left.and.arrow.down.right"
                             : "arrow.down.right.and.arrow.up.left",
                           enabled: tab != nil,
-                          action: { store.toggleZoom() },
+                          action: { runOutsideURLBarInteraction { store.toggleZoom() } },
                           help: store.zoomedTabID == nil
                             ? "Zoom focused tile (⌃⌥⌘F)"
                             : "Restore layout (⌃⌥⌘F)")
             BarIconButton(name: "tray.and.arrow.down",
                           enabled: !(tab?.isBlank ?? true),
-                          action: { if let id = store.focusedTabID { store.park(id) } },
+                          action: {
+                              runOutsideURLBarInteraction {
+                                  if let id = store.focusedTabID { store.park(id) }
+                              }
+                          },
                           help: "Park (⌥⌘P)")
             BarIconButton(name: "rectangle.split.1x2", enabled: store.canSplitSelection,
-                          action: { store.splitSelection(axis: .horizontal) },
+                          action: {
+                              runOutsideURLBarInteraction {
+                                  store.splitSelection(axis: .horizontal)
+                              }
+                          },
                           help: "Horizontal Split (⌘\\)")
             BarIconButton(name: "rectangle.split.2x1", enabled: store.canSplitSelection,
-                          action: { store.splitSelection(axis: .vertical) },
+                          action: {
+                              runOutsideURLBarInteraction {
+                                  store.splitSelection(axis: .vertical)
+                              }
+                          },
                           help: "Vertical Split (⇧⌘\\)")
             MoreMenu(
                 tab: tab,
@@ -129,10 +145,15 @@ struct BottomBar: View {
                 historyPresented: $historyPresented,
                 onSaveLayout: onSaveLayout,
                 onApplyLayout: onApplyLayout,
-                onDeleteLayout: onDeleteLayout
+                onDeleteLayout: onDeleteLayout,
+                onOutsideURLBarInteraction: onOutsideURLBarInteraction
             )
             BarIconButton(name: "xmark", enabled: tab != nil,
-                          action: { if let id = store.focusedTabID { store.close(id) } },
+                          action: {
+                              runOutsideURLBarInteraction {
+                                  if let id = store.focusedTabID { store.close(id) }
+                              }
+                          },
                           help: "Close tile (⌘W)")
         }
     }
@@ -163,6 +184,11 @@ struct BottomBar: View {
         return horizontalSizeClass == .compact
         #endif
     }
+
+    private func runOutsideURLBarInteraction(_ action: () -> Void) {
+        onOutsideURLBarInteraction()
+        action()
+    }
 }
 
 private struct MoreMenu: View {
@@ -173,6 +199,7 @@ private struct MoreMenu: View {
     let onSaveLayout: () -> Void
     let onApplyLayout: (LayoutPreset) -> Void
     let onDeleteLayout: (UUID) -> Void
+    let onOutsideURLBarInteraction: () -> Void
 
     @Environment(BrowserStore.self) private var store
     @Environment(HistoryStore.self) private var history
@@ -183,7 +210,9 @@ private struct MoreMenu: View {
     var body: some View {
         Menu {
             Button {
-                openWindow(value: WindowID())
+                runOutsideURLBarInteraction {
+                    openWindow(value: WindowID())
+                }
             } label: {
                 Label("New Window", systemImage: "macwindow.badge.plus")
             }
@@ -201,13 +230,17 @@ private struct MoreMenu: View {
             Divider()
 
             Button {
-                historyPresented = true
+                runOutsideURLBarInteraction {
+                    historyPresented = true
+                }
             } label: {
                 Label("History", systemImage: "clock.arrow.circlepath")
             }
 
             Button {
-                settingsPresented = true
+                runOutsideURLBarInteraction {
+                    settingsPresented = true
+                }
             } label: {
                 Label("Settings", systemImage: "gearshape")
             }
@@ -231,8 +264,10 @@ private struct MoreMenu: View {
 
             if actions.canDuplicate {
                 Button {
-                    store.split(tabID, axis: .vertical, side: .after,
-                                loadURL: tab.currentURL)
+                    runOutsideURLBarInteraction {
+                        store.split(tabID, axis: .vertical, side: .after,
+                                    loadURL: tab.currentURL)
+                    }
                 } label: {
                     Label("Duplicate Tile", systemImage: "plus.rectangle.on.rectangle")
                 }
@@ -240,7 +275,9 @@ private struct MoreMenu: View {
 
             if actions.canCopyURL {
                 Button {
-                    copyURL(tab.currentURL)
+                    runOutsideURLBarInteraction {
+                        copyURL(tab.currentURL)
+                    }
                 } label: {
                     Label("Copy URL", systemImage: "doc.on.doc")
                 }
@@ -248,7 +285,9 @@ private struct MoreMenu: View {
 
             if actions.canReload {
                 Button {
-                    tab.reload()
+                    runOutsideURLBarInteraction {
+                        tab.reload()
+                    }
                 } label: {
                     Label("Reload", systemImage: "arrow.clockwise")
                 }
@@ -257,7 +296,10 @@ private struct MoreMenu: View {
             if actions.canRequestDesktopSite {
                 Toggle(isOn: Binding(
                     get: { tab.requestsDesktopSite },
-                    set: { tab.requestsDesktopSite = $0 }
+                    set: {
+                        onOutsideURLBarInteraction()
+                        tab.requestsDesktopSite = $0
+                    }
                 )) {
                     Label("Request Desktop Site", systemImage: "desktopcomputer")
                 }
@@ -266,7 +308,10 @@ private struct MoreMenu: View {
             if actions.canSuspendMedia {
                 Toggle(isOn: Binding(
                     get: { tab.isMediaSuspended },
-                    set: { tab.isMediaSuspended = $0 }
+                    set: {
+                        onOutsideURLBarInteraction()
+                        tab.isMediaSuspended = $0
+                    }
                 )) {
                     Label(tab.isMediaSuspended ? "Resume Media" : "Suspend Media",
                           systemImage: tab.isMediaSuspended ? "play.circle" : "pause.circle")
@@ -275,7 +320,9 @@ private struct MoreMenu: View {
 
             if actions.canPark {
                 Button {
-                    store.park(tabID)
+                    runOutsideURLBarInteraction {
+                        store.park(tabID)
+                    }
                 } label: {
                     Label("Park", systemImage: "tray.and.arrow.down")
                 }
@@ -286,7 +333,9 @@ private struct MoreMenu: View {
             }
 
             Button(role: .destructive) {
-                store.close(tabID)
+                runOutsideURLBarInteraction {
+                    store.close(tabID)
+                }
             } label: {
                 Label("Close", systemImage: "xmark")
             }
@@ -297,21 +346,27 @@ private struct MoreMenu: View {
     private var layoutMenu: some View {
         Menu {
             Button {
-                store.selectParentGroup()
+                runOutsideURLBarInteraction {
+                    store.selectParentGroup()
+                }
             } label: {
                 Label("Select Parent Group", systemImage: "square.stack.3d.up")
             }
             .disabled(!store.canSelectParentGroup)
 
             Button {
-                store.equalizeSelectedGroup()
+                runOutsideURLBarInteraction {
+                    store.equalizeSelectedGroup()
+                }
             } label: {
                 Label("Equalize Group", systemImage: "rectangle.split.2x2")
             }
             .disabled(!store.canTransformSelectedGroup)
 
             Button {
-                store.rotateSelectedGroup()
+                runOutsideURLBarInteraction {
+                    store.rotateSelectedGroup()
+                }
             } label: {
                 Label("Rotate Group", systemImage: "rotate.right")
             }
@@ -321,14 +376,18 @@ private struct MoreMenu: View {
                 Divider()
 
                 Button {
-                    store.splitSelection(axis: .horizontal)
+                    runOutsideURLBarInteraction {
+                        store.splitSelection(axis: .horizontal)
+                    }
                 } label: {
                     Label("Horizontal Split", systemImage: "rectangle.split.1x2")
                 }
                 .disabled(!store.canSplitSelection)
 
                 Button {
-                    store.splitSelection(axis: .vertical)
+                    runOutsideURLBarInteraction {
+                        store.splitSelection(axis: .vertical)
+                    }
                 } label: {
                     Label("Vertical Split", systemImage: "rectangle.split.2x1")
                 }
@@ -343,7 +402,9 @@ private struct MoreMenu: View {
     private var layoutsMenu: some View {
         Menu {
             Button {
-                onSaveLayout()
+                runOutsideURLBarInteraction {
+                    onSaveLayout()
+                }
             } label: {
                 Label("Save Current Layout…", systemImage: "square.and.arrow.down")
             }
@@ -354,12 +415,16 @@ private struct MoreMenu: View {
                 ForEach(layouts.presets) { preset in
                     Menu {
                         Button {
-                            onApplyLayout(preset)
+                            runOutsideURLBarInteraction {
+                                onApplyLayout(preset)
+                            }
                         } label: {
                             Label("Apply", systemImage: "rectangle.on.rectangle")
                         }
                         Button(role: .destructive) {
-                            onDeleteLayout(preset.id)
+                            runOutsideURLBarInteraction {
+                                onDeleteLayout(preset.id)
+                            }
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
@@ -376,10 +441,18 @@ private struct MoreMenu: View {
     @ViewBuilder
     private var privacyHistoryMenu: some View {
         Menu {
-            Toggle("Record History", isOn: $recordHistory)
+            Toggle("Record History", isOn: Binding(
+                get: { recordHistory },
+                set: {
+                    onOutsideURLBarInteraction()
+                    recordHistory = $0
+                }
+            ))
 
             Button(role: .destructive) {
-                history.clear()
+                runOutsideURLBarInteraction {
+                    history.clear()
+                }
             } label: {
                 Label("Clear History", systemImage: "trash")
             }
@@ -396,6 +469,11 @@ private struct MoreMenu: View {
         pasteboard.clearContents()
         pasteboard.setString(urlString, forType: .string)
         #endif
+    }
+
+    private func runOutsideURLBarInteraction(_ action: () -> Void) {
+        onOutsideURLBarInteraction()
+        action()
     }
 }
 
@@ -420,6 +498,7 @@ struct TileMenuActions: Equatable {
 
 private struct ReloadControl: View {
     let tab: Tab?
+    let onInteraction: () -> Void
     @State private var suppressNextTap = false
 
     var body: some View {
@@ -427,11 +506,15 @@ private struct ReloadControl: View {
             BarIconButton(
                 name: "xmark",
                 enabled: tab != nil,
-                action: { tab?.stop() },
+                action: {
+                    onInteraction()
+                    tab?.stop()
+                },
                 help: "Stop"
             )
         } else {
             Button {
+                onInteraction()
                 if suppressNextTap {
                     suppressNextTap = false
                 } else {
@@ -447,6 +530,7 @@ private struct ReloadControl: View {
                 LongPressGesture(minimumDuration: 0.45)
                     .onEnded { _ in
                         guard tab != nil else { return }
+                        onInteraction()
                         suppressNextTap = true
                         tab?.forceReload()
                         Task { @MainActor in
@@ -474,6 +558,7 @@ private struct HistoryMenu: View {
     let help: String
     let primaryAction: () -> Void
     let enabled: Bool
+    let onInteraction: () -> Void
 
     var body: some View {
         Group {
@@ -481,6 +566,7 @@ private struct HistoryMenu: View {
                 Menu {
                     ForEach(items.prefix(25), id: \.self) { item in
                         Button {
+                            onInteraction()
                             tab?.go(to: item)
                         } label: {
                             Text(label(for: item))
@@ -489,6 +575,7 @@ private struct HistoryMenu: View {
                 } label: {
                     iconLabel
                 } primaryAction: {
+                    onInteraction()
                     primaryAction()
                 }
                 .menuStyle(.button)
@@ -496,7 +583,12 @@ private struct HistoryMenu: View {
                 .menuIndicator(.hidden)
                 .menuOrder(.fixed)
             } else {
-                Button(action: primaryAction) { iconLabel }
+                Button {
+                    onInteraction()
+                    primaryAction()
+                } label: {
+                    iconLabel
+                }
                     .buttonStyle(.plain)
                     .disabled(!enabled)
             }

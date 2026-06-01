@@ -4,12 +4,14 @@ private let splitHandleHitThickness: CGFloat = 14
 
 struct BSPView: View {
     let node: BSPNode
+    var onOutsideURLBarInteraction: () -> Void = {}
     @Environment(BrowserStore.self) private var store
 
     var body: some View {
         switch node {
         case .leaf(let tabID):
-            TileView(tabID: tabID)
+            TileView(tabID: tabID,
+                     onOutsideURLBarInteraction: onOutsideURLBarInteraction)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .id(tabID)
 
@@ -20,20 +22,24 @@ struct BSPView: View {
                 let secondSize = max(0, length - firstSize)
                 ZStack(alignment: .topLeading) {
                     if axis == .horizontal {
-                        BSPView(node: first)
+                        BSPView(node: first,
+                                onOutsideURLBarInteraction: onOutsideURLBarInteraction)
                             .frame(width: proxy.size.width, height: firstSize)
                             .position(x: proxy.size.width / 2, y: firstSize / 2)
-                        BSPView(node: second)
+                        BSPView(node: second,
+                                onOutsideURLBarInteraction: onOutsideURLBarInteraction)
                             .frame(width: proxy.size.width, height: secondSize)
                             .position(x: proxy.size.width / 2,
                                       y: firstSize + secondSize / 2)
                         splitHandle(id: id, axis: axis, usable: length)
                             .position(x: proxy.size.width / 2, y: firstSize)
                     } else {
-                        BSPView(node: first)
+                        BSPView(node: first,
+                                onOutsideURLBarInteraction: onOutsideURLBarInteraction)
                             .frame(width: firstSize, height: proxy.size.height)
                             .position(x: firstSize / 2, y: proxy.size.height / 2)
-                        BSPView(node: second)
+                        BSPView(node: second,
+                                onOutsideURLBarInteraction: onOutsideURLBarInteraction)
                             .frame(width: secondSize, height: proxy.size.height)
                             .position(x: firstSize + secondSize / 2,
                                       y: proxy.size.height / 2)
@@ -56,8 +62,14 @@ struct BSPView: View {
         SplitHandle(
             axis: axis,
             thickness: splitHandleHitThickness,
-            onSelect:    { store.selectGroup(id) },
-            onBegin:     { store.beginRatioDrag(id) },
+            onSelect:    {
+                onOutsideURLBarInteraction()
+                store.selectGroup(id)
+            },
+            onBegin:     {
+                onOutsideURLBarInteraction()
+                store.beginRatioDrag(id)
+            },
             onTranslate: { t in store.updateRatioDrag(id, usable: usable, translation: t) },
             onEnd:       { store.endRatioDrag(id) }
         )
