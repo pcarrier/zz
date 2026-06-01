@@ -692,11 +692,11 @@ final class BrowserStore {
         case .center:
             let targetTab = tabs[targetTabID]
             root = root.replacingLeaf(targetTabID, with: parkedTabID)
+            if zoomedTabID == targetTabID { zoomedTabID = nil }
             if targetTab?.isBlank ?? true {
                 parked.remove(at: parkedIdx)
                 tabs[targetTabID] = nil
             } else {
-                if zoomedTabID == targetTabID { zoomedTabID = nil }
                 parked[parkedIdx] = targetTabID
             }
 
@@ -981,11 +981,15 @@ final class BrowserStore {
 
     private func scheduleSave() {
         saveTask?.cancel()
-        let snapshot = currentSnapshot()
         let url = Self.snapshotFile(for: windowID)
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
+            // Build the snapshot only after the debounce window elapses, so a
+            // burst of notifyPersistenceChanged() calls (e.g. contentOffset KVO
+            // firing at display-refresh rate during scrolling) coalesces into a
+            // single main-actor snapshot build rather than one per tick.
+            let snapshot = currentSnapshot()
             // Encode on the main actor (WindowSnapshot's Codable conformance is
             // main-actor-isolated, and the encode is cheap + coalesced by the
             // debounce), then hand the bytes to a nonisolated writer so the
@@ -1091,6 +1095,12 @@ final class BrowserStore {
         tabs = tabs.filter { parked.contains($0.key) }
         for (id, tab) in loadedTabs { tabs[id] = tab }
         root = newRoot
+        // A preset may reference a tab id that is currently parked. After the swap
+        // such an id lives in both root (as a loaded preset tab) and parked,
+        // violating the root/parked disjointness invariant and leaving the pane
+        // unhostable. Reconcile parked against the new tree/tabs so the loaded leaf
+        // wins and the stale parked entry is dropped.
+        parked = Self.sanitizedParkedIDs(parked, tabs: tabs, root: root)
         if let focused = preset.focusedTabID,
            newRoot.contains(focused),
            tabs[focused] != nil {
@@ -1510,10 +1520,27 @@ nonisolated enum OmniboxRanker {
             return Classification(tier: tierWordStart, titleRanges: r, urlRanges: [], matchStart: 0)
         }
         if let r = acronymRanges(q, in: host) {
-            // Map per-letter ranges onto the displayed url.
-            let urlRanges = r.compactMap { seg -> Range<String.Index>? in
+            // Map per-letter ranges onto the displayed url. Anchor the search at
+            // the host's position in the url and advance monotonically so each
+            // letter lands on its real host segment rather than an earlier
+            // coincidental occurrence (e.g. inside the scheme).
+            let hostStart: Int
+            if let hr = url.range(of: host, options: [.caseInsensitive]) {
+                hostStart = url.distance(from: url.startIndex, to: hr.lowerBound)
+            } else {
+                hostStart = 0
+            }
+            var cursor = hostStart
+            var urlRanges: [Range<String.Index>] = []
+            for seg in r {
+                // Offset of this letter within the host.
+                let segOffset = host.distance(from: host.startIndex, to: seg.lowerBound)
                 let ch = String(host[seg]).lowercased()
-                return rangeOfSubstring(ch, in: url, from: 0)
+                let searchFrom = max(cursor, hostStart + segOffset)
+                if let ur = rangeOfSubstring(ch, in: url, from: searchFrom) {
+                    urlRanges.append(ur)
+                    cursor = url.distance(from: url.startIndex, to: ur.upperBound)
+                }
             }
             return Classification(tier: tierWordStart, titleRanges: [], urlRanges: urlRanges, matchStart: 0)
         }
@@ -1620,7 +1647,10 @@ nonisolated enum OmniboxRanker {
     private static func rangeOfSubstring(_ needleLower: String, in s: String,
                                          from: Int) -> Range<String.Index>? {
         guard !needleLower.isEmpty else { return nil }
-        return s.range(of: needleLower, options: [.caseInsensitive])
+        guard let start = s.index(s.startIndex, offsetBy: from, limitedBy: s.endIndex) else {
+            return nil
+        }
+        return s.range(of: needleLower, options: [.caseInsensitive], range: start..<s.endIndex)
     }
 
     /// Locate the leading `length` chars of the host within the displayed url.
@@ -1853,9 +1883,14 @@ enum OmniboxSuggestions {
             return nil
         }
         let url = resolved.absoluteString
-        // An active keyword bang (keyword + query) always renders as a search row
-        // labeled with the matched engine, e.g. "Search GitHub".
-        if let m = KeywordBangs.match(trimmed, engines: keywordEngines), !m.query.isEmpty {
+        // An active keyword bang (keyword + query) renders as a search row labeled
+        // with the matched engine, e.g. "Search GitHub" — but only when expansion
+        // actually produced the engine's URL. A malformed template (no "%s") makes
+        // expand return nil and resolve falls through to the default engine, so we
+        // must not mislabel the row in that case.
+        if let m = KeywordBangs.match(trimmed, engines: keywordEngines), !m.query.isEmpty,
+           let expanded = KeywordBangs.expand(trimmed, engines: keywordEngines),
+           expanded == resolved {
             return OmniboxItem(id: url, url: url,
                                title: "Search \(m.engine.title)", kind: .search)
         }

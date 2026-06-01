@@ -117,6 +117,27 @@ nonisolated enum FaviconLogic {
     }
 }
 
+/// Serializes all favicon image-file IO so writes and deletes for the same
+/// deterministic filename cannot reorder. (Independent `Task.detached` blocks
+/// could otherwise run a stale delete after a fresh write of the same path.)
+actor FaviconDiskIO {
+    static let shared = FaviconDiskIO()
+
+    func write(_ data: Data, name: String, dir: URL) {
+        do {
+            try FileManager.default.createDirectory(
+                at: dir, withIntermediateDirectories: true)
+            try data.write(to: dir.appending(path: name), options: .atomic)
+        } catch {
+            faviconLogger.error("Favicon image write failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func remove(name: String, dir: URL) {
+        try? FileManager.default.removeItem(at: dir.appending(path: name))
+    }
+}
+
 /// In-memory + on-disk favicon cache keyed by canonical host. Fetches happen
 /// off the main actor; decoded images and the host->filename map live on the
 /// main actor and drive `@Observable` updates so views refresh when an icon
@@ -149,6 +170,11 @@ final class FaviconStore {
     @ObservationIgnored
     private var saveTask: Task<Void, Never>?
 
+    /// Serial tail for image-file IO. Each write/delete chains off the previous
+    /// one so operations on the same deterministic filename run in enqueue order.
+    @ObservationIgnored
+    private var imageIOTail: Task<Void, Never> = Task {}
+
     init() {
         if let data = try? Data(contentsOf: Self.mapFileURL),
            let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
@@ -173,10 +199,16 @@ final class FaviconStore {
         }
 
         // Lazily hydrate from disk if we have a stored file for this host.
+        // Return the decoded image immediately, but defer the @Observable write
+        // to `images` to the next runloop tick: mutating tracked state inside the
+        // current view-body evaluation is undefined behavior.
         if let name = fileNames[host],
            let data = try? Data(contentsOf: Self.imageDir.appending(path: name)),
            let img = FaviconLogic.decode(data) {
-            store(image: img, for: host, persist: false)
+            Task { @MainActor in
+                guard self.images[host] == nil else { return }
+                self.store(image: img, for: host, persist: false)
+            }
             return img
         }
 
@@ -219,7 +251,7 @@ final class FaviconStore {
             let name = fileNames[host] ?? FaviconLogic.fileName(for: host)
             fileNames[host] = name
             if let data {
-                Self.writeImageOffMain(data, name: name)
+                writeImageOffMain(data, name: name)
             }
             scheduleSaveMap()
         }
@@ -232,7 +264,7 @@ final class FaviconStore {
         for host in victims {
             images[host] = nil
             if let name = fileNames.removeValue(forKey: host) {
-                Self.removeImageOffMain(name: name)
+                removeImageOffMain(name: name)
             }
         }
         order.removeFirst(victims.count)
@@ -276,21 +308,21 @@ final class FaviconStore {
         return nil
     }
 
-    nonisolated private static func writeImageOffMain(_ data: Data, name: String) {
-        Task.detached {
-            do {
-                try FileManager.default.createDirectory(
-                    at: imageDir, withIntermediateDirectories: true)
-                try data.write(to: imageDir.appending(path: name), options: .atomic)
-            } catch {
-                faviconLogger.error("Favicon image write failed: \(error.localizedDescription, privacy: .public)")
-            }
+    private func writeImageOffMain(_ data: Data, name: String) {
+        let dir = Self.imageDir
+        let previous = imageIOTail
+        imageIOTail = Task {
+            await previous.value
+            await FaviconDiskIO.shared.write(data, name: name, dir: dir)
         }
     }
 
-    nonisolated private static func removeImageOffMain(name: String) {
-        Task.detached {
-            try? FileManager.default.removeItem(at: imageDir.appending(path: name))
+    private func removeImageOffMain(name: String) {
+        let dir = Self.imageDir
+        let previous = imageIOTail
+        imageIOTail = Task {
+            await previous.value
+            await FaviconDiskIO.shared.remove(name: name, dir: dir)
         }
     }
 

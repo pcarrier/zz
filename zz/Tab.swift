@@ -36,6 +36,39 @@ private struct StoredHTTPAuthCredential: Codable {
     var password: String
 }
 
+// Reference-typed holder for the completion handlers queued against a single
+// in-flight auth alert. The alert's action closures capture this box strongly,
+// so it (and every queued handler) survives even if the owning Tab is
+// deallocated while the alert is still on screen. Without this, the second and
+// later challenges for one protection space -- which only append here and never
+// create their own alert -- would be orphaned when the Tab's dictionary died,
+// hanging those WebKit challenges until they time out.
+private final class HTTPAuthPendingCompletions {
+    private var completions: [(URLSession.AuthChallengeDisposition, URLCredential?) -> Void]
+    private var answered = false
+
+    init(_ completion: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        completions = [completion]
+    }
+
+    func append(_ completion: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        completions.append(completion)
+    }
+
+    // Answers every queued handler exactly once and drops the references, so a
+    // later drain (e.g. the weak-self fallback firing after self answered, or a
+    // teardown) is a no-op rather than a double invocation.
+    func drain(_ disposition: URLSession.AuthChallengeDisposition, _ credential: URLCredential?) {
+        guard !answered else { return }
+        answered = true
+        let pending = completions
+        completions = []
+        for completion in pending {
+            completion(disposition, credential)
+        }
+    }
+}
+
 private enum HTTPAuthCredentialStore {
     private static let service = "surf.zz.http-auth"
 
@@ -191,8 +224,7 @@ final class Tab {
     private var lastHTTPAuthCredentialsTried: [HTTPAuthKey: URLCredential] = [:]
 
     @ObservationIgnored
-    private var pendingHTTPAuthCompletions:
-        [HTTPAuthKey: [(URLSession.AuthChallengeDisposition, URLCredential?) -> Void]] = [:]
+    private var pendingHTTPAuthCompletions: [HTTPAuthKey: HTTPAuthPendingCompletions] = [:]
 
     @ObservationIgnored
     private let uiDelegate = SameWindowUIDelegate()
@@ -288,6 +320,17 @@ final class Tab {
         }
     }
 
+
+    deinit {
+        // If the pane is closed while an auth alert is still on screen, the
+        // alert's action closures may never fire (programmatic dismissal does
+        // not invoke them), so the queued completions would otherwise hang their
+        // WebKit challenges. Drain every pending box with a cancel. drain() is
+        // idempotent, so a later fallback firing is a harmless no-op.
+        for pending in pendingHTTPAuthCompletions.values {
+            pending.drain(.cancelAuthenticationChallenge, nil)
+        }
+    }
 
     func reload()    { webView.reload() }
     func forceReload() {
@@ -555,13 +598,13 @@ final class Tab {
             }
         }
 
-        if var pending = pendingHTTPAuthCompletions[key] {
+        if let pending = pendingHTTPAuthCompletions[key] {
             pending.append(completionHandler)
-            pendingHTTPAuthCompletions[key] = pending
             return
         }
 
-        pendingHTTPAuthCompletions[key] = [completionHandler]
+        let pending = HTTPAuthPendingCompletions(completionHandler)
+        pendingHTTPAuthCompletions[key] = pending
         #if !os(macOS)
         let host = protectionSpace.port > 0
             ? "\(protectionSpace.host):\(protectionSpace.port)"
@@ -587,12 +630,13 @@ final class Tab {
             field.isSecureTextEntry = true
         }
         // Capture self weakly so an open alert does not keep this Tab (and its
-        // WKWebView) alive after the pane is closed. completionHandler is captured
-        // directly as a fallback: if self is gone, pendingHTTPAuthCompletions died
-        // with it, so answer WebKit here to avoid a hung challenge.
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+        // WKWebView) alive after the pane is closed. The pending-completions box is
+        // captured strongly as a fallback: if self is gone, pendingHTTPAuthCompletions
+        // died with it, so drain every queued handler here (not just the first
+        // challenge's) to avoid hung challenges.
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self, pending] _ in
             guard let self else {
-                completionHandler(.cancelAuthenticationChallenge, nil)
+                pending.drain(.cancelAuthenticationChallenge, nil)
                 return
             }
             self.completeHTTPAuthChallenge(
@@ -602,11 +646,11 @@ final class Tab {
                 credential: nil
             )
         })
-        alert.addAction(UIAlertAction(title: "Sign In", style: .default) { [weak self, weak alert] _ in
+        alert.addAction(UIAlertAction(title: "Sign In", style: .default) { [weak self, weak alert, pending] _ in
             let username = alert?.textFields?.first?.text ?? ""
             let password = alert?.textFields?.dropFirst().first?.text ?? ""
             guard let self else {
-                completionHandler(.cancelAuthenticationChallenge, nil)
+                pending.drain(.cancelAuthenticationChallenge, nil)
                 return
             }
             // Treat an empty username/password as a cancel so a fumbled dialog
@@ -683,10 +727,8 @@ final class Tab {
             URLCredentialStorage.shared.set(credential, for: protectionSpace)
             URLCredentialStorage.shared.setDefaultCredential(credential, for: protectionSpace)
         }
-        let completions = pendingHTTPAuthCompletions.removeValue(forKey: key) ?? []
-        for completion in completions {
-            completion(disposition, credential)
-        }
+        let pending = pendingHTTPAuthCompletions.removeValue(forKey: key)
+        pending?.drain(disposition, credential)
     }
 
     private func clearHTTPAuthCredential(
