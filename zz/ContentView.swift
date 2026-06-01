@@ -100,7 +100,7 @@ private struct BrowserScene: View {
         }
         .statusBarHiddenIfAvailable()
         .onChange(of: store.focusedTabID) { _, _ in
-            draft = store.focusedTab?.currentURL ?? ""
+            if !urlFocused { draft = store.focusedTab?.currentURL ?? "" }
             if urlFocused { urlEditingTabID = store.focusedTabID }
             selectedSuggestionIndex = nil
         }

@@ -56,7 +56,15 @@ private enum HTTPAuthCredentialStore {
     static func set(_ credential: URLCredential, for key: HTTPAuthKey) {
         guard let user = credential.user,
               let password = credential.password,
+              !(user.isEmpty && password.isEmpty),
               let data = try? JSONEncoder().encode(StoredHTTPAuthCredential(user: user, password: password)) else {
+            return
+        }
+
+        // Avoid churning the keychain (delete + add) on every auth-protected
+        // navigation when reusing an already-stored, unchanged credential.
+        if let existing = Self.credential(for: key),
+           existing.user == user, existing.password == password {
             return
         }
 
@@ -236,13 +244,18 @@ final class Tab {
         configuration: WKWebViewConfiguration,
         navigationAction: WKNavigationAction
     ) -> WKWebView? {
-        if let webView = onNewWindowRequest?(configuration, navigationAction) {
-            return webView
+        // The owner (BrowserStore) handles every NewWindowPolicy itself:
+        // sidebar/splitRight create and return a web view, samePane loads into
+        // the source pane, and block suppresses the popup -- all returning nil
+        // for the latter two on purpose. Only fall back to loading in the
+        // source pane when there is genuinely no owner installed.
+        guard let onNewWindowRequest else {
+            if let url = navigationAction.request.url {
+                webView.load(URLRequest(url: url))
+            }
+            return nil
         }
-        if let url = navigationAction.request.url {
-            webView.load(URLRequest(url: url))
-        }
-        return nil
+        return onNewWindowRequest(configuration, navigationAction)
     }
 
     func handleCloseWindowRequest() {
@@ -405,6 +418,17 @@ final class Tab {
         alert.addAction(UIAlertAction(title: "Sign In", style: .default) { [weak alert] _ in
             let username = alert?.textFields?.first?.text ?? ""
             let password = alert?.textFields?.dropFirst().first?.text ?? ""
+            // Treat an empty username/password as a cancel so a fumbled dialog
+            // does not persist an empty credential that auto-fails each restart.
+            guard !username.isEmpty || !password.isEmpty else {
+                self.completeHTTPAuthChallenge(
+                    key: key,
+                    protectionSpace: protectionSpace,
+                    disposition: .cancelAuthenticationChallenge,
+                    credential: nil
+                )
+                return
+            }
             let credential = URLCredential(
                 user: username,
                 password: password,

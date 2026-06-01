@@ -32,6 +32,23 @@ enum BSPNode: Codable, Identifiable, Hashable {
         }
     }
 
+    /// Returns a copy of the tree in which any leaf whose tab id has already
+    /// appeared earlier in a pre-order traversal is rewritten with a fresh UUID,
+    /// guaranteeing every leaf carries a unique id.
+    func deduplicatingLeafIDs(seen: inout Set<UUID>) -> BSPNode {
+        switch self {
+        case .leaf(let id):
+            if seen.insert(id).inserted {
+                return self
+            }
+            return .leaf(tabID: UUID())
+        case .split(let id, let axis, let ratio, let a, let b):
+            return .split(id: id, axis: axis, ratio: ratio,
+                          first: a.deduplicatingLeafIDs(seen: &seen),
+                          second: b.deduplicatingLeafIDs(seen: &seen))
+        }
+    }
+
     func contains(_ tabID: UUID) -> Bool {
         switch self {
         case .leaf(let id): return id == tabID
@@ -259,7 +276,7 @@ enum BSPNode: Codable, Identifiable, Hashable {
     func neighbor(of tabID: UUID, direction: Direction) -> UUID? {
         var path: [(node: BSPNode, fromFirst: Bool)] = []
         guard pathTo(tabID, path: &path) else { return nil }
-        for step in path.reversed() {
+        for step in path {
             if case .split(_, let axis, _, let a, let b) = step.node {
                 let aligned = (axis == .horizontal && (direction == .up || direction == .down)) ||
                               (axis == .vertical && (direction == .left || direction == .right))
@@ -394,7 +411,8 @@ final class BrowserStore {
                 loadedTabs[tab.id] = tab
             }
             self.tabs = loadedTabs
-            self.root = snap.root
+            var seenLeafIDs = Set<UUID>()
+            self.root = snap.root.deduplicatingLeafIDs(seen: &seenLeafIDs)
             self.sidebarWidth = snap.sidebarWidth
             for tabID in root.tabIDs() where tabs[tabID] == nil {
                 tabs[tabID] = Tab(id: tabID, history: history)
@@ -432,8 +450,9 @@ final class BrowserStore {
         tab.onPersistenceChange = { [weak self] in
             self?.scheduleSave()
         }
-        tab.onNewWindowRequest = { [weak self] configuration, navigationAction in
-            self?.handleNewWindowRequest(
+        tab.onNewWindowRequest = { [weak self, weak tab] configuration, navigationAction in
+            guard let self, let tab else { return nil }
+            return self.handleNewWindowRequest(
                 from: tab.id,
                 configuration: configuration,
                 navigationAction: navigationAction
@@ -649,6 +668,7 @@ final class BrowserStore {
                 parked.remove(at: parkedIdx)
                 tabs[targetTabID] = nil
             } else {
+                if zoomedTabID == targetTabID { zoomedTabID = nil }
                 parked[parkedIdx] = targetTabID
             }
 
@@ -850,6 +870,7 @@ final class BrowserStore {
 
     func park(_ tabID: UUID) {
         guard let tab = tabs[tabID], !tab.isBlank, root.contains(tabID) else { return }
+        if zoomedTabID == tabID { zoomedTabID = nil }
         let newID = makeBlankTab()
         root = root.replacingLeaf(tabID, with: newID)
         parked.insert(tabID, at: 0)
@@ -865,6 +886,7 @@ final class BrowserStore {
     }
 
     func discardParked(_ parkedTabID: UUID) {
+        if zoomedTabID == parkedTabID { zoomedTabID = nil }
         parked.removeAll { $0 == parkedTabID }
         tabs[parkedTabID] = nil
         scheduleSave()
@@ -987,13 +1009,20 @@ enum OmniboxSuggestions {
 
         return HistoryEntry(
             url: resolved.absoluteString,
-            title: directTitle(for: trimmed),
+            title: directTitle(for: trimmed, resolved: resolved, searchTemplate: searchTemplate),
             lastVisited: .now
         )
     }
 
-    private static func directTitle(for query: String) -> String {
-        if query.contains(" ") || !query.contains(".") {
+    private static func directTitle(for query: String,
+                                    resolved: URL,
+                                    searchTemplate: String) -> String {
+        // Title should reflect the actual resolution: only show "Search" when
+        // URLNormalizer produced the search-template URL rather than a direct
+        // navigation (e.g. an explicit scheme like http://intranet resolves to
+        // a URL even though it has no dot).
+        if let searchURL = SearchPreferences.searchURL(for: query, template: searchTemplate),
+           searchURL == resolved {
             return "Search"
         }
         return "Open"
