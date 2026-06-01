@@ -180,7 +180,7 @@ private struct SuggestionRow: View {
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    highlighted(item.url, ranges: item.urlRanges, base: .secondary)
+                    highlighted(item.url, ranges: item.urlRanges, base: .secondaryLabelText)
                         .font(.system(.callout, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -226,16 +226,18 @@ private struct SuggestionRow: View {
     private func highlighted(_ string: String,
                              ranges: [Range<String.Index>],
                              base: Color) -> some View {
-        // Apply the base color via .foregroundStyle on the Text, NOT inside the
-        // AttributedString: a semantic Color like .secondary set as
-        // AttributedString.foregroundColor renders transparent (invisible URLs).
-        // Spans we explicitly color (the matches) override; the rest inherit base.
-        Text(attributed(string, ranges: ranges)).foregroundStyle(base)
+        Text(attributed(string, ranges: ranges, base: base))
     }
 
     private func attributed(_ string: String,
-                            ranges: [Range<String.Index>]) -> AttributedString {
+                            ranges: [Range<String.Index>],
+                            base: Color) -> AttributedString {
         var attr = AttributedString(string)
+        // Color EVERY run with a concrete base: runs left without an explicit
+        // foregroundColor render transparent once any other run is colored, and a
+        // semantic Color (.secondary) also renders transparent here -- both make
+        // the non-highlighted parts of the URL disappear. `base` must be concrete.
+        attr.foregroundColor = base
         for r in ranges {
             // Clamp against the live string; ranges were built on the same
             // displayed value but guard against drift / combining chars.

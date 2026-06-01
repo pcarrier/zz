@@ -32,6 +32,17 @@ extension Color {
         Color(NSColor.selectedTextBackgroundColor)
         #endif
     }
+
+    /// Concrete secondary-label color. Unlike the semantic `Color.secondary`,
+    /// this resolves correctly as an AttributedString foreground color (the
+    /// semantic one renders transparent there).
+    static var secondaryLabelText: Color {
+        #if canImport(UIKit)
+        Color(UIColor.secondaryLabel)
+        #else
+        Color(NSColor.secondaryLabelColor)
+        #endif
+    }
 }
 
 nonisolated enum SiteVisual {
