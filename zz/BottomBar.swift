@@ -1,5 +1,10 @@
 import SwiftUI
 import WebKit
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 struct BottomBar: View {
     @Binding var draft: String
@@ -183,6 +188,12 @@ private struct MoreMenu: View {
                 Label("New Window", systemImage: "macwindow.badge.plus")
             }
 
+            if tab != nil {
+                Divider()
+                focusedPaneActions
+                Divider()
+            }
+
             layoutMenu
             layoutsMenu
             privacyHistoryMenu
@@ -214,6 +225,75 @@ private struct MoreMenu: View {
     }
 
     @ViewBuilder
+    private var focusedPaneActions: some View {
+        if let tab, let tabID = store.focusedTabID {
+            let actions = TileMenuActions(isBlank: tab.isBlank)
+
+            if actions.canDuplicate {
+                Button {
+                    store.split(tabID, axis: .vertical, side: .after,
+                                loadURL: tab.currentURL)
+                } label: {
+                    Label("Duplicate Tile", systemImage: "plus.rectangle.on.rectangle")
+                }
+            }
+
+            if actions.canCopyURL {
+                Button {
+                    copyURL(tab.currentURL)
+                } label: {
+                    Label("Copy URL", systemImage: "doc.on.doc")
+                }
+            }
+
+            if actions.canReload {
+                Button {
+                    tab.reload()
+                } label: {
+                    Label("Reload", systemImage: "arrow.clockwise")
+                }
+            }
+
+            if actions.canRequestDesktopSite {
+                Toggle(isOn: Binding(
+                    get: { tab.requestsDesktopSite },
+                    set: { tab.requestsDesktopSite = $0 }
+                )) {
+                    Label("Request Desktop Site", systemImage: "desktopcomputer")
+                }
+            }
+
+            if actions.canSuspendMedia {
+                Toggle(isOn: Binding(
+                    get: { tab.isMediaSuspended },
+                    set: { tab.isMediaSuspended = $0 }
+                )) {
+                    Label(tab.isMediaSuspended ? "Resume Media" : "Suspend Media",
+                          systemImage: tab.isMediaSuspended ? "play.circle" : "pause.circle")
+                }
+            }
+
+            if actions.canPark {
+                Button {
+                    store.park(tabID)
+                } label: {
+                    Label("Park", systemImage: "tray.and.arrow.down")
+                }
+            }
+
+            if actions.canPark || actions.canCopyURL {
+                Divider()
+            }
+
+            Button(role: .destructive) {
+                store.close(tabID)
+            } label: {
+                Label("Close", systemImage: "xmark")
+            }
+        }
+    }
+
+    @ViewBuilder
     private var layoutMenu: some View {
         Menu {
             Button {
@@ -241,13 +321,6 @@ private struct MoreMenu: View {
                 Divider()
 
                 Button {
-                    if let id = store.focusedTabID { store.park(id) }
-                } label: {
-                    Label("Park", systemImage: "tray.and.arrow.down")
-                }
-                .disabled(tab?.isBlank ?? true)
-
-                Button {
                     store.splitSelection(axis: .horizontal)
                 } label: {
                     Label("Horizontal Split", systemImage: "rectangle.split.1x2")
@@ -260,12 +333,6 @@ private struct MoreMenu: View {
                     Label("Vertical Split", systemImage: "rectangle.split.2x1")
                 }
                 .disabled(!store.canSplitSelection)
-                Button(role: .destructive) {
-                    if let id = store.focusedTabID { store.close(id) }
-                } label: {
-                    Label("Close Pane", systemImage: "xmark")
-                }
-                .disabled(tab == nil)
             }
         } label: {
             Label("Layout", systemImage: "rectangle.3.group")
@@ -319,6 +386,35 @@ private struct MoreMenu: View {
         } label: {
             Label("Privacy & History", systemImage: "hand.raised")
         }
+    }
+
+    private func copyURL(_ urlString: String) {
+        #if canImport(UIKit)
+        UIPasteboard.general.string = urlString
+        #elseif canImport(AppKit)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(urlString, forType: .string)
+        #endif
+    }
+}
+
+struct TileMenuActions: Equatable {
+    let canDuplicate: Bool
+    let canCopyURL: Bool
+    let canReload: Bool
+    let canPark: Bool
+    let canRequestDesktopSite: Bool
+    let canSuspendMedia: Bool
+
+    init(isBlank: Bool) {
+        let hasContent = !isBlank
+        canDuplicate = hasContent
+        canCopyURL = hasContent
+        canReload = hasContent
+        canPark = hasContent
+        canRequestDesktopSite = hasContent
+        canSuspendMedia = hasContent
     }
 }
 
