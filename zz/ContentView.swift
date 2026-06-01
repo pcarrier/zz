@@ -28,7 +28,6 @@ private struct BrowserScene: View {
 
     @Environment(HistoryStore.self) private var history
     @Environment(FaviconStore.self) private var favicons
-    @Environment(PinnedShortcutStore.self) private var pinned
     @Environment(LayoutPresetStore.self) private var layouts
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
@@ -176,7 +175,6 @@ private struct BrowserScene: View {
                 store.flushSave()
                 history.flushSave()
                 favicons.flushSave()
-                pinned.flushSave()
                 layouts.flushSave()
             }
         }

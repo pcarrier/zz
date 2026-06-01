@@ -67,10 +67,9 @@ nonisolated enum SearchPreferences {
     /// Seeded so users discover the feature; safe because they share no keyword
     /// with normal URLs/queries and only fire when a keyword + query is typed.
     static let defaultKeywordEngines: [KeywordEngine] = [
+        KeywordEngine(keyword: "ddg", templateURL: "https://duckduckgo.com/?q=%s", title: "DuckDuckGo"),
         KeywordEngine(keyword: "g", templateURL: "https://www.google.com/search?q=%s", title: "Google"),
-        KeywordEngine(keyword: "gh", templateURL: "https://github.com/search?q=%s", title: "GitHub"),
         KeywordEngine(keyword: "w", templateURL: "https://en.wikipedia.org/wiki/Special:Search?search=%s", title: "Wikipedia"),
-        KeywordEngine(keyword: "yt", templateURL: "https://www.youtube.com/results?search_query=%s", title: "YouTube"),
     ]
 
     private static let searchQueryAllowed: CharacterSet = {

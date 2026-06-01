@@ -12,7 +12,6 @@ struct TileView: View {
     let tabID: UUID
 
     @Environment(BrowserStore.self) private var store
-    @Environment(PinnedShortcutStore.self) private var pinned
 
     @State private var dropState = TileDropState()
 
@@ -31,10 +30,10 @@ struct TileView: View {
         let active = store.focusedTabID == tabID && store.selectedGroupID == nil
         Group {
             if tab.isBlank {
-                NewTabPageView(
-                    onOpen: { url in store.focus(tabID); tab.load(url) },
-                    onFocus: { store.focus(tabID); store.focusURLBar() }
-                )
+                EmptyTileState {
+                    store.focus(tabID)
+                    store.focusURLBar()
+                }
             } else {
                 HostedWebView(webView: tab.webView,
                               onInteraction: { store.focus(tabID) },
@@ -134,22 +133,6 @@ struct TileView: View {
             }
         }
 
-        if actions.canPin {
-            if pinned.isPinned(url: tab.currentURL) {
-                Button {
-                    pinned.unpin(url: tab.currentURL)
-                } label: {
-                    Label("Unpin from New Tab", systemImage: "pin.slash")
-                }
-            } else {
-                Button {
-                    pinned.pin(url: tab.currentURL, title: tab.title)
-                } label: {
-                    Label("Pin to New Tab", systemImage: "pin")
-                }
-            }
-        }
-
         if actions.canRequestDesktopSite {
             Toggle(isOn: Binding(
                 get: { tab.requestsDesktopSite },
@@ -229,7 +212,6 @@ struct TileMenuActions: Equatable {
     let canPark: Bool
     let canRequestDesktopSite: Bool
     let canSuspendMedia: Bool
-    let canPin: Bool
     /// Close is always available, so it has no stored flag.
 
     init(isBlank: Bool) {
@@ -240,7 +222,6 @@ struct TileMenuActions: Equatable {
         canPark = hasContent
         canRequestDesktopSite = hasContent
         canSuspendMedia = hasContent
-        canPin = hasContent
     }
 }
 

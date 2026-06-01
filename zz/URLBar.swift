@@ -226,18 +226,16 @@ private struct SuggestionRow: View {
     private func highlighted(_ string: String,
                              ranges: [Range<String.Index>],
                              base: Color) -> some View {
-        if ranges.isEmpty {
-            Text(string).foregroundStyle(base)
-        } else {
-            Text(attributed(string, ranges: ranges, base: base))
-        }
+        // Apply the base color via .foregroundStyle on the Text, NOT inside the
+        // AttributedString: a semantic Color like .secondary set as
+        // AttributedString.foregroundColor renders transparent (invisible URLs).
+        // Spans we explicitly color (the matches) override; the rest inherit base.
+        Text(attributed(string, ranges: ranges)).foregroundStyle(base)
     }
 
     private func attributed(_ string: String,
-                            ranges: [Range<String.Index>],
-                            base: Color) -> AttributedString {
+                            ranges: [Range<String.Index>]) -> AttributedString {
         var attr = AttributedString(string)
-        attr.foregroundColor = base
         for r in ranges {
             // Clamp against the live string; ranges were built on the same
             // displayed value but guard against drift / combining chars.
