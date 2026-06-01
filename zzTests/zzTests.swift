@@ -50,7 +50,8 @@ struct BrowserUtilityTests {
 
         let suggestions = OmniboxSuggestions.entries(
             matching: "example.com",
-            historyMatches: history,
+            history: history,
+            openTabs: [],
             limit: 10
         )
 
@@ -59,18 +60,283 @@ struct BrowserUtilityTests {
             "https://example.com/docs",
         ])
         #expect(suggestions.first?.title == "Open")
+        #expect(suggestions.first?.kind == .open)
     }
 
     @Test func omniboxSuggestionsIncludeTypedSearchFirst() {
         let suggestions = OmniboxSuggestions.entries(
             matching: "open ai",
-            historyMatches: [],
+            history: [],
+            openTabs: [],
             limit: 10,
             searchTemplate: SearchEngine.duckDuckGo.template!
         )
 
         #expect(suggestions.first?.url == "https://duckduckgo.com/?q=open%20ai")
         #expect(suggestions.first?.title == "Search")
+        #expect(suggestions.first?.kind == .search)
+    }
+
+    // MARK: - Omnibox ranker overhaul
+
+    private static let pinnedNow = Date(timeIntervalSince1970: 1_700_000_000)
+
+    private func entry(_ url: String, _ title: String? = nil,
+                       count: Int = 1, ageSeconds: TimeInterval = 60) -> HistoryEntry {
+        HistoryEntry(url: url, title: title,
+                     lastVisited: Self.pinnedNow.addingTimeInterval(-ageSeconds),
+                     visitCount: count)
+    }
+
+    private func suggest(_ query: String, _ history: [HistoryEntry],
+                         openTabs: [(url: String, title: String?, tabID: UUID)] = [],
+                         limit: Int = 20) -> [OmniboxItem] {
+        OmniboxSuggestions.entries(
+            matching: query, history: history, openTabs: openTabs,
+            now: Self.pinnedNow, limit: limit,
+            searchTemplate: SearchEngine.duckDuckGo.template!)
+    }
+
+    @Test func hostPrefixBeatsScatter() {
+        let history = [
+            entry("https://login.target.com/account", "Target Login"),
+            entry("https://github.com", "GitHub"),
+        ]
+        let out = suggest("git", history)
+        let real = out.filter { $0.kind != .search && $0.kind != .open }
+        #expect(real.first?.url == "https://github.com")
+        if let target = real.firstIndex(where: { $0.url.contains("login.target.com") }),
+           let gh = real.firstIndex(where: { $0.url == "https://github.com" }) {
+            #expect(gh < target)
+        }
+    }
+
+    @Test func rejectsPureScatter() {
+        // "xyz" only appears as a scattered subsequence, never contiguous/boundary.
+        let history = [entry("https://example.com/x-foo-y-bar-z-baz", "Example")]
+        let out = suggest("xyz", history)
+        #expect(out.allSatisfy { $0.kind == .open || $0.kind == .search })
+    }
+
+    @Test func contiguousSubstringBeatsFuzzy() {
+        // github.com matches "hub" as a contiguous substring (Tier 2). The other
+        // entry only matches as a scattered subsequence (Tier 1 fuzzy).
+        let history = [
+            entry("https://github.com", "GitHub"),
+            entry("https://thunderbolt.example.com/x", "Thunderbolt"),
+        ]
+        let out = suggest("hub", history)
+        let real = out.filter { $0.kind == .history || $0.kind == .openTab }
+        #expect(real.first?.url == "https://github.com")
+    }
+
+    @Test func acronymMatchesWordStarts() {
+        let gh = suggest("gh", [entry("https://github.com", "GitHub")])
+            .filter { $0.kind == .history }
+        #expect(gh.first?.url == "https://github.com")
+
+        let so = suggest("so", [entry("https://stackoverflow.com", "Stack Overflow")])
+            .filter { $0.kind == .history }
+        #expect(so.first?.url == "https://stackoverflow.com")
+    }
+
+    @Test func frequencyOutranksRecencyWithinTier() {
+        // A heavily-visited site slightly less recent still wins: its frequency
+        // weight (200 visits) outweighs the one-bucket recency deficit.
+        let history = [
+            entry("https://gitlab.com", "GitLab", count: 1, ageSeconds: 60),
+            entry("https://github.com", "GitHub", count: 200, ageSeconds: 4_000),
+        ]
+        let out = suggest("git", history).filter { $0.kind == .history }
+        #expect(out.first?.url == "https://github.com")
+    }
+
+    @Test func recencyOutranksWithinTierWhenCountsEqual() {
+        // Equal visitCount: the more recent (younger recency bucket) wins.
+        let recent = [
+            entry("https://gitb.com", "GitB", count: 5, ageSeconds: 200_000),
+            entry("https://gita.com", "GitA", count: 5, ageSeconds: 4_000),
+        ]
+        let out = suggest("git", recent).filter { $0.kind == .history }
+        #expect(out.first?.url == "https://gita.com")
+
+        // Flips when the older one's visit count is high enough to overcome the
+        // one-bucket recency deficit.
+        let flipped = [
+            entry("https://gitb.com", "GitB", count: 1000, ageSeconds: 200_000),
+            entry("https://gita.com", "GitA", count: 5, ageSeconds: 4_000),
+        ]
+        let out2 = suggest("git", flipped).filter { $0.kind == .history }
+        #expect(out2.first?.url == "https://gitb.com")
+    }
+
+    @Test func tierDominatesFrequency() {
+        let history = [
+            entry("https://example.com/git-archive-tool", "Git Archive", count: 500),
+            entry("https://github.com", "GitHub", count: 1),
+        ]
+        let out = suggest("git", history).filter { $0.kind == .history }
+        #expect(out.first?.url == "https://github.com")
+    }
+
+    @Test func frequencyWeightLog2Capped() {
+        let w1 = OmniboxRanker.frequencyWeight(visitCount: 1)
+        let w10 = OmniboxRanker.frequencyWeight(visitCount: 10)
+        let w1000 = OmniboxRanker.frequencyWeight(visitCount: 1000)
+        #expect(w1 < w10)
+        #expect(w10 <= w1000)
+        #expect(w1000 <= 400)
+        #expect(w1 >= 0)
+    }
+
+    @Test func normalizedDedupCollapsesVariants() {
+        let store = HistoryStore()
+        store.clear()
+        store.record(url: "https://x.com", title: "X")
+        store.record(url: "https://x.com/", title: "X")
+        store.record(url: "http://x.com", title: "X")
+        store.record(url: "https://www.x.com", title: "X")
+        #expect(store.entries.count == 1)
+        #expect(store.entries.first?.visitCount == 4)
+    }
+
+    @Test func recordIncrementsVisitCount() {
+        let store = HistoryStore()
+        store.clear()
+        store.record(url: "https://y.com/page", title: "Y")
+        let firstVisit = store.entries.first?.lastVisited
+        store.record(url: "https://y.com/page", title: "Y")
+        #expect(store.entries.count == 1)
+        #expect(store.entries.first?.visitCount == 2)
+        if let firstVisit, let second = store.entries.first?.lastVisited {
+            #expect(second >= firstVisit)
+        }
+    }
+
+    @Test func legacyHistoryDecodesVisitCountDefaultsToOne() throws {
+        let json = """
+        [{"url":"https://legacy.com","title":"Legacy","lastVisited":0}]
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode([HistoryEntry].self, from: json)
+        #expect(decoded.count == 1)
+        #expect(decoded.first?.visitCount == 1)
+    }
+
+    @Test func canonicalDedupeInSuggestions() {
+        let history = [
+            entry("https://x.com", "X"),
+            entry("https://x.com/", "X"),
+        ]
+        let out = suggest("x.com", history).filter { $0.kind == .history }
+        #expect(out.count == 1)
+    }
+
+    @Test func directEntrySuppressedWhenRealPrefixExists() {
+        let history = [entry("https://github.com", "GitHub", count: 5)]
+        let out = suggest("github.com", history)
+        let ghRows = out.filter { URLCanonicalizer.key($0.url) == "https://github.com" }
+        #expect(ghRows.count == 1)
+        #expect(ghRows.first?.kind == .history)
+    }
+
+    @Test func directEntryKeptForNovelURL() {
+        let out = suggest("newsite.com", [])
+        #expect(out.first?.kind == .open)
+        #expect(out.first?.url == "https://newsite.com")
+    }
+
+    @Test func openTabSuggestionFloatsAndDedups() {
+        let tabID = UUID()
+        let history = [entry("https://github.com", "GitHub", count: 3)]
+        let out = suggest("git", history,
+                          openTabs: [(url: "https://github.com", title: "GitHub", tabID: tabID)])
+        let nonDirect = out.filter { $0.kind != .open && $0.kind != .search }
+        #expect(nonDirect.first?.kind == .openTab)
+        #expect(nonDirect.first?.tabID == tabID)
+        // History row for the same key is suppressed.
+        #expect(nonDirect.filter { URLCanonicalizer.key($0.url) == "https://github.com" }.count == 1)
+    }
+
+    @Test func openTabRoutesToFocusNotLoad() {
+        let tabID = UUID()
+        let openTab = OmniboxItem(id: "k", url: "https://github.com", title: "GitHub",
+                                  kind: .openTab, tabID: tabID)
+        #expect(OmniboxRoute.route(for: openTab) == .focus(tabID))
+
+        let hist = OmniboxItem(id: "k2", url: "https://github.com", title: "GitHub", kind: .history)
+        #expect(OmniboxRoute.route(for: hist) == .load("https://github.com"))
+
+        let open = OmniboxItem(id: "k3", url: "https://new.com", title: "Open", kind: .open)
+        #expect(OmniboxRoute.route(for: open) == .load("https://new.com"))
+    }
+
+    @Test func matchRangesReported() {
+        let norm = OmniboxRanker.normalize("git")
+        let cls = OmniboxRanker.classify(query: norm, host: "github.com",
+                                         url: "https://github.com", title: "GitHub")
+        #expect(cls != nil)
+        if let cls {
+            // url range covers leading "git" in the host portion of the url.
+            #expect(cls.urlRanges.contains { range in
+                "https://github.com"[range].lowercased() == "git"
+            })
+            #expect(cls.titleRanges.contains { range in
+                "GitHub"[range].lowercased() == "git"
+            })
+        }
+    }
+
+    @Test func earlinessBonusOrdersSubstrings() {
+        // Two Tier-2 substrings: earlier index ranks first.
+        let history = [
+            entry("https://example.com/a/b/zztarget", "deep target"),
+            entry("https://example.com/zztarget/a/b", "shallow target"),
+        ]
+        let out = suggest("zztarget", history).filter { $0.kind == .history }
+        #expect(out.first?.url == "https://example.com/zztarget/a/b")
+
+        // Host-prefix docs.x.com beats substring x.com/docs for "doc".
+        let docHistory = [
+            entry("https://x.com/docs", "X Docs"),
+            entry("https://docs.x.com", "Docs"),
+        ]
+        let docOut = suggest("doc", docHistory).filter { $0.kind == .history }
+        #expect(docOut.first?.url == "https://docs.x.com")
+    }
+
+    @Test func shorterUrlWinsOnTie() {
+        let history = [
+            entry("https://x.com/a?utm=longlonglongtracking", "A"),
+            entry("https://x.com/a", "A"),
+        ]
+        let out = suggest("x.com/a", history).filter { $0.kind == .history }
+        #expect(out.first?.url == "https://x.com/a")
+    }
+
+    @Test func deterministicTotalOrder() {
+        let history = [
+            entry("https://a.com/git", "Git A", count: 5, ageSeconds: 60),
+            entry("https://b.com/git", "Git B", count: 5, ageSeconds: 60),
+            entry("https://c.com/git", "Git C", count: 5, ageSeconds: 60),
+        ]
+        let a = suggest("git", history).map(\.url)
+        let b = suggest("git", history).map(\.url)
+        #expect(a == b)
+    }
+
+    @Test func emptyQueryOrdersOpenTabsThenFrecency() {
+        let tabID = UUID()
+        let history = [
+            entry("https://rare.com", "Rare", count: 1, ageSeconds: 2_000_000),
+            entry("https://hot.com", "Hot", count: 100, ageSeconds: 60),
+        ]
+        let out = OmniboxSuggestions.entries(
+            matching: "", history: history,
+            openTabs: [(url: "https://opentab.com", title: "Open Tab", tabID: tabID)],
+            now: Self.pinnedNow, limit: 20)
+        #expect(out.first?.kind == .openTab)
+        let hist = out.filter { $0.kind == .history }
+        #expect(hist.first?.url == "https://hot.com")
     }
 
     @Test func removingLeafFocusesDirectSibling() {

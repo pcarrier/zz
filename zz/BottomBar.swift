@@ -5,10 +5,11 @@ struct BottomBar: View {
     @Binding var draft: String
     @FocusState.Binding var urlFocused: Bool
     @Binding var selectedSuggestionIndex: Int?
-    let matches: [HistoryEntry]
+    let matches: [OmniboxItem]
     @Binding var sidebarPresented: Bool
     @Binding var settingsPresented: Bool
     let onCommit: (String) -> Void
+    let onSelect: (OmniboxItem) -> Void
 
     @Environment(BrowserStore.self) private var store
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -120,8 +121,10 @@ struct BottomBar: View {
     }
 
     private func submit() {
+        // Keyboard submit must route on kind exactly like click-select so an
+        // open-tab row focuses rather than reloads.
         if let idx = selectedSuggestionIndex, idx >= 0, idx < matches.count {
-            onCommit(matches[idx].url)
+            onSelect(matches[idx])
         } else {
             onCommit(draft)
         }

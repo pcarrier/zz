@@ -34,11 +34,16 @@ private struct BrowserScene: View {
         _store = State(initialValue: BrowserStore(windowID: windowID, history: history))
     }
 
-    private var matches: [HistoryEntry] {
+    private var matches: [OmniboxItem] {
         guard urlFocused else { return [] }
         // Fetch up to 100; the suggestion list caps the visible rows and
         // makes the rest scrollable.
-        return history.omniboxSuggestions(matching: draft, limit: 100)
+        return history.omniboxSuggestions(
+            matching: draft,
+            openTabs: store.openTabSuggestions(),
+            now: .now,
+            limit: 100
+        )
     }
 
     var body: some View {
@@ -94,7 +99,8 @@ private struct BrowserScene: View {
                 matches: matches,
                 sidebarPresented: $sidebarPresented,
                 settingsPresented: $settingsPresented,
-                onCommit: commit
+                onCommit: commit,
+                onSelect: selectSuggestion
             )
             .environment(store)
         }
@@ -205,8 +211,17 @@ private struct BrowserScene: View {
         tab.focusForBrowsing()
     }
 
-    private func selectSuggestion(_ entry: HistoryEntry) {
-        commit(entry.url)
+    private func selectSuggestion(_ item: OmniboxItem) {
+        switch OmniboxRoute.route(for: item) {
+        case .focus(let id):
+            guard let tab = store.tab(id) else { commit(item.url); return }
+            store.focus(id)
+            urlFocused = false
+            selectedSuggestionIndex = nil
+            tab.focusForBrowsing()
+        case .load(let url):
+            commit(url)
+        }
     }
 
     private func tabIDForCommit() -> UUID? {

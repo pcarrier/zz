@@ -88,9 +88,9 @@ struct URLBar: View {
 }
 
 struct SuggestionList: View {
-    let suggestions: [HistoryEntry]
+    let suggestions: [OmniboxItem]
     var selectedIndex: Int? = nil
-    let onSelect: (HistoryEntry) -> Void
+    let onSelect: (OmniboxItem) -> Void
 
     private static let maxVisibleRows = 5
     fileprivate static let coordinateSpace = "SuggestionListCoordinateSpace"
@@ -101,14 +101,14 @@ struct SuggestionList: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(suggestions.enumerated()), id: \.element.id) { idx, entry in
+                    ForEach(Array(suggestions.enumerated()), id: \.element.id) { idx, item in
                         SuggestionRow(
-                            entry: entry,
+                            item: item,
                             isSelected: idx == selectedIndex,
                             onSelect: onSelect
                         )
-                        .id(entry.id)
-                        .background(SuggestionRowFrameReader(id: entry.id))
+                        .id(item.id)
+                        .background(SuggestionRowFrameReader(id: item.id))
                         if idx < suggestions.count - 1 {
                             Divider().opacity(0.4)
                         }
@@ -162,9 +162,9 @@ struct SuggestionList: View {
 }
 
 private struct SuggestionRow: View {
-    let entry: HistoryEntry
+    let item: OmniboxItem
     let isSelected: Bool
-    let onSelect: (HistoryEntry) -> Void
+    let onSelect: (OmniboxItem) -> Void
 
     @State private var didSelect = false
 
@@ -178,17 +178,26 @@ private struct SuggestionRow: View {
                     .foregroundStyle(.tertiary)
                     .frame(width: 16)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(displayTitle)
+                    highlighted(displayTitle, ranges: titleRanges, base: .primary)
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    Text(entry.url)
+                    highlighted(item.url, ranges: item.urlRanges, base: .secondary)
                         .font(.system(.callout, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
+                if item.kind == .openTab {
+                    Text("Switch to Tab")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.12))
+                        .clipShape(.capsule)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -205,19 +214,57 @@ private struct SuggestionRow: View {
     private func selectOnce() {
         guard !didSelect else { return }
         didSelect = true
-        onSelect(entry)
+        onSelect(item)
+    }
+
+    /// Title ranges target the title string when present; otherwise we display
+    /// the host and have no title ranges to apply.
+    private var titleRanges: [Range<String.Index>] {
+        let raw = item.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return raw.isEmpty ? [] : item.titleRanges
+    }
+
+    @ViewBuilder
+    private func highlighted(_ string: String,
+                             ranges: [Range<String.Index>],
+                             base: Color) -> some View {
+        if ranges.isEmpty {
+            Text(string).foregroundStyle(base)
+        } else {
+            Text(attributed(string, ranges: ranges, base: base))
+        }
+    }
+
+    private func attributed(_ string: String,
+                            ranges: [Range<String.Index>],
+                            base: Color) -> AttributedString {
+        var attr = AttributedString(string)
+        attr.foregroundColor = base
+        for r in ranges {
+            // Clamp against the live string; ranges were built on the same
+            // displayed value but guard against drift / combining chars.
+            guard r.lowerBound >= string.startIndex,
+                  r.upperBound <= string.endIndex,
+                  r.lowerBound < r.upperBound,
+                  let lo = AttributedString.Index(r.lowerBound, within: attr),
+                  let hi = AttributedString.Index(r.upperBound, within: attr) else { continue }
+            attr[lo..<hi].foregroundColor = .accentColor
+            attr[lo..<hi].inlinePresentationIntent = .stronglyEmphasized
+        }
+        return attr
     }
 
     private var displayTitle: String {
-        let title = entry.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return title.isEmpty ? SiteVisual.host(for: entry.url) : title
+        let title = item.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return title.isEmpty ? SiteVisual.host(for: item.url) : title
     }
 
     private var iconName: String {
-        switch displayTitle {
-        case "Search": return "magnifyingglass"
-        case "Open": return "arrow.up.forward.app"
-        default: return "clock.arrow.circlepath"
+        switch item.kind {
+        case .search:  return "magnifyingglass"
+        case .open:    return "arrow.up.forward.app"
+        case .openTab: return "rectangle.on.rectangle"
+        case .history: return "clock.arrow.circlepath"
         }
     }
 }
