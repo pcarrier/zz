@@ -88,14 +88,7 @@ private struct SidebarParkedRow: View {
         }
         .clipped()
         .contentShape(.rect)
-        // Swipe-to-dismiss is a touch idiom only. On macOS a mouse drag also
-        // initiates .draggable (no long-press required, unlike touch), so both
-        // would run at once and the swipe's .onEnded discardParked would
-        // deallocate the tab mid drag-session -> crash. macOS dismisses via the
-        // context-menu Close and drags to reorder instead.
-        #if !os(macOS)
         .simultaneousGesture(swipeToDismissGesture)
-        #endif
         .background(SidebarRowFrameReader(tabID: tabID))
         .overlay(alignment: .top) {
             if reorderInsertionIndex == index {
@@ -155,7 +148,6 @@ private struct SidebarParkedRow: View {
         .opacity(swipeOffset > 0 ? 1 : 0)
     }
 
-    #if !os(macOS)
     private var swipeToDismissGesture: some Gesture {
         DragGesture(minimumDistance: 14, coordinateSpace: .local)
             .onChanged { value in
@@ -171,7 +163,13 @@ private struct SidebarParkedRow: View {
                 let threshold = max(72, CGFloat(sidebarWidth) * 0.42)
                 if value.translation.width > threshold ||
                     value.predictedEndTranslation.width > threshold * 1.2 {
-                    store.discardParked(tabID)
+                    // Defer the discard to the next runloop tick. With a pointer
+                    // (mouse/trackpad on macOS OR a mouse-enabled iPad) a drag also
+                    // starts a .draggable session on the same gesture; discarding
+                    // synchronously here deallocates the tab while that session is
+                    // still unwinding on pointer-up -> crash. Letting the session
+                    // finish first makes the swipe safe regardless of input device.
+                    Task { @MainActor in store.discardParked(tabID) }
                 } else {
                     swipeOffset = 0
                 }
@@ -182,7 +180,6 @@ private struct SidebarParkedRow: View {
         value.translation.width > 0 &&
             value.translation.width > abs(value.translation.height) * 1.25
     }
-    #endif
 }
 
 // MARK: - Drag payload
