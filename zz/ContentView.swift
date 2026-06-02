@@ -393,10 +393,10 @@ private struct ShortcutLayer: View {
                 .frame(width: 0, height: 0)
 
             shortcut("Split Horizontal", "\\") {
-                splitSelection(.horizontal)
+                store.splitSelection(axis: .horizontal)
             }
             shortcut("Split Vertical",   "\\", modifiers: [.command, .shift]) {
-                splitSelection(.vertical)
+                store.splitSelection(axis: .vertical)
             }
             shortcut("Select Parent Group", "p", modifiers: [.command, .option, .control],
                      action: store.selectParentGroup)
@@ -436,9 +436,6 @@ private struct ShortcutLayer: View {
             .frame(width: 0, height: 0)
     }
 
-    private func splitSelection(_ axis: BSPNode.Axis) {
-        store.splitSelection(axis: axis)
-    }
 }
 
 #if os(macOS)

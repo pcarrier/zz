@@ -79,22 +79,12 @@ nonisolated enum SearchPreferences {
     }()
 
     static var selectedEngine: SearchEngine {
-        get {
-            let raw = UserDefaults.standard.string(forKey: engineKey)
-            return raw.flatMap(SearchEngine.init(rawValue:)) ?? defaultEngine
-        }
-        set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: engineKey)
-        }
+        let raw = UserDefaults.standard.string(forKey: engineKey)
+        return raw.flatMap(SearchEngine.init(rawValue:)) ?? defaultEngine
     }
 
     static var customTemplate: String {
-        get {
-            UserDefaults.standard.string(forKey: customTemplateKey) ?? defaultCustomTemplate
-        }
-        set {
-            UserDefaults.standard.set(newValue, forKey: customTemplateKey)
-        }
+        UserDefaults.standard.string(forKey: customTemplateKey) ?? defaultCustomTemplate
     }
 
     /// User-defined keyword ("bang") engines. Persisted as JSON in UserDefaults.
@@ -202,25 +192,15 @@ nonisolated enum BrowserPreferences {
     static let defaultNewWindowPolicy = NewWindowPolicy.sidebar
 
     static var newWindowPolicy: NewWindowPolicy {
-        get {
-            let raw = UserDefaults.standard.string(forKey: newWindowPolicyKey)
-            return raw.flatMap(NewWindowPolicy.init(rawValue:)) ?? defaultNewWindowPolicy
-        }
-        set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: newWindowPolicyKey)
-        }
+        let raw = UserDefaults.standard.string(forKey: newWindowPolicyKey)
+        return raw.flatMap(NewWindowPolicy.init(rawValue:)) ?? defaultNewWindowPolicy
     }
 
     static var recordsHistory: Bool {
-        get {
-            guard UserDefaults.standard.object(forKey: recordHistoryKey) != nil else {
-                return true
-            }
-            return UserDefaults.standard.bool(forKey: recordHistoryKey)
+        guard UserDefaults.standard.object(forKey: recordHistoryKey) != nil else {
+            return true
         }
-        set {
-            UserDefaults.standard.set(newValue, forKey: recordHistoryKey)
-        }
+        return UserDefaults.standard.bool(forKey: recordHistoryKey)
     }
 
     static let requestDesktopSiteKey = "requestDesktopSite"
@@ -229,15 +209,10 @@ nonisolated enum BrowserPreferences {
     /// Initial "Request Desktop Site" content mode applied to newly created tabs.
     /// Restored tabs use their own persisted value instead (see TabRecord).
     static var requestsDesktopSite: Bool {
-        get {
-            guard UserDefaults.standard.object(forKey: requestDesktopSiteKey) != nil else {
-                return defaultRequestsDesktopSite
-            }
-            return UserDefaults.standard.bool(forKey: requestDesktopSiteKey)
+        guard UserDefaults.standard.object(forKey: requestDesktopSiteKey) != nil else {
+            return defaultRequestsDesktopSite
         }
-        set {
-            UserDefaults.standard.set(newValue, forKey: requestDesktopSiteKey)
-        }
+        return UserDefaults.standard.bool(forKey: requestDesktopSiteKey)
     }
 }
 

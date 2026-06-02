@@ -188,8 +188,7 @@ struct BottomBar: View {
     }
 
     private func runOutsideURLBarInteraction(_ action: () -> Void) {
-        onOutsideURLBarInteraction()
-        action()
+        zz.runOutsideURLBarInteraction(onOutsideURLBarInteraction, action)
     }
 }
 
@@ -247,10 +246,7 @@ private struct MoreMenu: View {
                 Label("Settings", systemImage: "gearshape")
             }
         } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 14, weight: .medium))
-                .frame(width: 30, height: 30)
-                .contentShape(.rect)
+            barIcon("ellipsis")
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -474,8 +470,7 @@ private struct MoreMenu: View {
     }
 
     private func runOutsideURLBarInteraction(_ action: () -> Void) {
-        onOutsideURLBarInteraction()
-        action()
+        zz.runOutsideURLBarInteraction(onOutsideURLBarInteraction, action)
     }
 }
 
@@ -524,7 +519,7 @@ private struct ReloadControl: View {
                     tab?.reload()
                 }
             } label: {
-                iconLabel
+                barIcon("arrow.clockwise")
             }
             .buttonStyle(.plain)
             .disabled(tab == nil)
@@ -561,13 +556,6 @@ private struct ReloadControl: View {
             }
         }
     }
-
-    private var iconLabel: some View {
-        Image(systemName: "arrow.clockwise")
-            .font(.system(size: 14, weight: .medium))
-            .frame(width: 30, height: 30)
-            .contentShape(.rect)
-    }
 }
 
 private struct HistoryMenu: View {
@@ -592,7 +580,7 @@ private struct HistoryMenu: View {
                         }
                     }
                 } label: {
-                    iconLabel
+                    barIcon(icon)
                 } primaryAction: {
                     onInteraction()
                     primaryAction()
@@ -606,7 +594,7 @@ private struct HistoryMenu: View {
                     onInteraction()
                     primaryAction()
                 } label: {
-                    iconLabel
+                    barIcon(icon)
                 }
                     .buttonStyle(.plain)
                     .disabled(!enabled)
@@ -614,13 +602,6 @@ private struct HistoryMenu: View {
         }
         .opacity(enabled ? 1 : 0.35)
         .help(help)
-    }
-
-    private var iconLabel: some View {
-        Image(systemName: icon)
-            .font(.system(size: 14, weight: .medium))
-            .frame(width: 30, height: 30)
-            .contentShape(.rect)
     }
 
     private func label(for item: WKBackForwardListItem) -> String {
@@ -637,14 +618,26 @@ private struct BarIconButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: name)
-                .font(.system(size: 14, weight: .medium))
-                .frame(width: 30, height: 30)
-                .contentShape(.rect)
+            barIcon(name)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.35)
         .help(help)
     }
+}
+
+private func barIcon(_ name: String) -> some View {
+    Image(systemName: name)
+        .font(.system(size: 14, weight: .medium))
+        .frame(width: 30, height: 30)
+        .contentShape(.rect)
+}
+
+private func runOutsideURLBarInteraction(
+    _ onOutsideURLBarInteraction: () -> Void,
+    _ action: () -> Void
+) {
+    onOutsideURLBarInteraction()
+    action()
 }

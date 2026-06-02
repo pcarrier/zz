@@ -558,7 +558,7 @@ struct BrowserUtilityTests {
 }
 
 @MainActor
-struct FaviconLogicTests {
+struct BrowserLogicTests {
 
     @Test func candidateURLsUseOnlySiteFavicon() {
         let urls = FaviconLogic.candidateURLs(host: "example.com").map(\.absoluteString)
@@ -796,11 +796,10 @@ struct FaviconLogicTests {
 @MainActor
 struct LayoutPresetTests {
 
-    private func preset(_ name: String, root: BSPNode? = nil,
-                        tabs: [TabRecord]? = nil) -> LayoutPreset {
+    private func preset(_ name: String) -> LayoutPreset {
         let id = UUID()
-        let node = root ?? .leaf(tabID: id)
-        let records = tabs ?? [TabRecord(id: id, url: "https://a.com", title: "A")]
+        let node: BSPNode = .leaf(tabID: id)
+        let records = [TabRecord(id: id, url: "https://a.com", title: "A")]
         return LayoutPreset(name: name, root: node,
                             focusedTabID: records.first?.id, tabs: records)
     }

@@ -298,8 +298,6 @@ final class Tab {
         self.webView.navigationDelegate = navDelegate
         #if !os(macOS)
         self.webView.isFindInteractionEnabled = true
-        #endif
-        #if !os(macOS)
         self.webView.scrollView.contentInsetAdjustmentBehavior = .never
         self.webView.scrollView.automaticallyAdjustsScrollIndicatorInsets = false
         // Match Safari on pages that lock or do not need scrolling.
@@ -507,10 +505,6 @@ final class Tab {
     /// covers every frame (including cross-origin embeds) and uses no private API.
     func applyMediaSuspension() {
         webView.setAllMediaPlaybackSuspended(isMediaSuspended)
-    }
-
-    func toggleMediaSuspension() {
-        isMediaSuspended.toggle()
     }
 
     func didFinishNavigation() {

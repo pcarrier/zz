@@ -97,20 +97,6 @@ struct SplitHandle: View {
     @State private var didBegin = false
     @GestureState private var gestureActive = false
 
-    init(axis: BSPNode.Axis,
-         thickness: CGFloat = 12,
-         onSelect: @escaping () -> Void = {},
-         onBegin: @escaping () -> Void = {},
-         onTranslate: @escaping (CGFloat) -> Void,
-         onEnd: @escaping () -> Void = {}) {
-        self.axis = axis
-        self.thickness = thickness
-        self.onSelect = onSelect
-        self.onBegin = onBegin
-        self.onTranslate = onTranslate
-        self.onEnd = onEnd
-    }
-
     var body: some View {
         Color.clear
             .frame(width: axis == .vertical ? thickness : nil,

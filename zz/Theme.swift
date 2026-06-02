@@ -240,12 +240,6 @@ final class FaviconStore {
         }
     }
 
-    /// Returns a cached image for the URL/host if available, otherwise nil while
-    /// it (lazily) kicks off an asynchronous fetch. Safe to call from view bodies.
-    func image(forURL url: String) -> PlatformImage? {
-        image(forHost: URLCanonicalizer.host(url))
-    }
-
     func image(forHost rawHost: String) -> PlatformImage? {
         let host = rawHost.lowercased()
         guard !host.isEmpty else { return nil }

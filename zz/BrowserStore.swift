@@ -554,7 +554,6 @@ final class BrowserStore {
 
     // MARK: Tabs
 
-    @discardableResult
     private func makeBlankTab(configuration: WKWebViewConfiguration? = nil) -> UUID {
         let tab = Tab(requestsDesktopSite: BrowserPreferences.requestsDesktopSite,
                       configuration: configuration, history: history)
@@ -777,11 +776,6 @@ final class BrowserStore {
             focusedTabID = newID
         }
         markPaneLayoutsChanged(expandedTabIDs)
-        scheduleSave()
-    }
-
-    func setRatio(_ ratio: Double, for splitID: UUID) {
-        root = root.settingRatio(ratio, for: splitID)
         scheduleSave()
     }
 
@@ -1431,7 +1425,6 @@ nonisolated enum OmniboxRanker {
     struct Normalized {
         let q: String       // trimmed, lowercased
         let qHost: String   // scheme + www stripped (for host comparisons)
-        let qRaw: String    // trimmed, lowercased, scheme/www intact
     }
 
     static func normalize(_ query: String) -> Normalized {
@@ -1442,7 +1435,7 @@ nonisolated enum OmniboxRanker {
             break
         }
         if qHost.hasPrefix("www.") { qHost.removeFirst(4) }
-        return Normalized(q: q, qHost: qHost, qRaw: q)
+        return Normalized(q: q, qHost: qHost)
     }
 
     /// A classification result: the winning tier plus matched ranges against the
@@ -1482,11 +1475,11 @@ nonisolated enum OmniboxRanker {
         }
 
         // Tier 4 — URL/title prefix.
-        if lowerCanonical.hasPrefix(norm.qRaw) || lowerTitle.hasPrefix(q) {
+        if lowerCanonical.hasPrefix(norm.q) || lowerTitle.hasPrefix(q) {
             var titleRanges: [Range<String.Index>] = []
             var urlRanges: [Range<String.Index>] = []
-            if lowerCanonical.hasPrefix(norm.qRaw),
-               let r = rangeOfSubstring(norm.qRaw, in: url, from: 0) {
+            if lowerCanonical.hasPrefix(norm.q),
+               let r = rangeOfSubstring(norm.q, in: url, from: 0) {
                 urlRanges = [r]
             }
             if lowerTitle.hasPrefix(q), let r = prefixRange(in: displayTitle, length: q.count) {
@@ -1715,7 +1708,7 @@ nonisolated enum OmniboxRanker {
 
     // MARK: Scoring
 
-    static func recencyWeight(lastVisited: Date, now: Date) -> Int {
+    private static func recencyWeight(lastVisited: Date, now: Date) -> Int {
         let age = now.timeIntervalSince(lastVisited)
         if age < 3600 { return 600 }
         if age < 86_400 { return 400 }
@@ -1730,7 +1723,7 @@ nonisolated enum OmniboxRanker {
         return min(Int(raw.rounded()), 400)
     }
 
-    static func earliness(matchStart: Int) -> Int {
+    private static func earliness(matchStart: Int) -> Int {
         max(0, 200 - matchStart * 8)
     }
 
@@ -1839,10 +1832,7 @@ enum OmniboxSuggestions {
             }
             let key = entry.canonicalKey
             let canonicalLength = key.count
-            let includeEarliness = cls.tier == OmniboxRanker.tierHostPrefix
-                || cls.tier == OmniboxRanker.tierPrefix
-                || cls.tier == OmniboxRanker.tierWordStart
-                || cls.tier == OmniboxRanker.tierSubstring
+            let includeEarliness = cls.tier != OmniboxRanker.tierFuzzy
             let s = OmniboxRanker.finalScore(
                 tier: cls.tier, visitCount: entry.visitCount,
                 lastVisited: entry.lastVisited, now: now, matchStart: cls.matchStart,
