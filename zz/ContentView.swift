@@ -25,6 +25,12 @@ private struct BrowserScene: View {
     @State private var saveLayoutPromptPresented: Bool = false
     @State private var saveLayoutName: String = ""
     @State private var matches: [OmniboxItem] = []
+    // The suggestion list stays open while EITHER the URL field has focus or the
+    // list itself is being interacted with. Tracked separately from urlFocused
+    // because clicking/scrolling the list with a pointer steals first-responder
+    // from the text field; tying visibility to urlFocused alone would dismiss the
+    // list mid-click. Closed only by an explicit dismiss (commit/select/outside).
+    @State private var omniboxOpen = false
     @FocusState private var urlFocused: Bool
 
     @Environment(HistoryStore.self) private var history
@@ -45,7 +51,7 @@ private struct BrowserScene: View {
     // affects it changes (draft / focus / open tabs / history). body, BottomBar
     // and the stale-selection check all read the cached value.
     private func computedMatches() -> [OmniboxItem] {
-        guard urlFocused else { return [] }
+        guard omniboxOpen else { return [] }
         // Fetch up to 100; the suggestion list caps the visible rows and
         // makes the rest scrollable.
         return history.omniboxSuggestions(
@@ -61,7 +67,7 @@ private struct BrowserScene: View {
     // its suggestion) and the history size. Driving a single onChange off this
     // keeps the body's modifier chain short enough to type-check.
     private var matchesInputKey: [String] {
-        var key = ["\(urlFocused)", draft, "\(history.entries.count)"]
+        var key = ["\(omniboxOpen)", draft, "\(history.entries.count)"]
         for s in store.openTabSuggestions() {
             key.append("\(s.tabID)|\(s.url)|\(s.title ?? "")")
         }
@@ -90,7 +96,7 @@ private struct BrowserScene: View {
             mainContent
                 .environment(store)
 
-            if urlFocused && !matches.isEmpty {
+            if omniboxOpen && !matches.isEmpty {
                 SuggestionList(
                     suggestions: matches,
                     selectedIndex: selectedSuggestionIndex,
@@ -179,9 +185,13 @@ private struct BrowserScene: View {
         }
         .onChange(of: urlFocused) { _, focused in
             if focused {
+                omniboxOpen = true
                 urlEditingTabID = store.focusedTabID
                 draft = store.focusedTab?.currentURL ?? ""
             } else {
+                // Do NOT close the list here: losing first-responder to the list
+                // itself (pointer click/scroll) must keep it open. It closes only
+                // via an explicit dismiss (commit / select / outside interaction).
                 selectedSuggestionIndex = nil
             }
         }
@@ -294,6 +304,7 @@ private struct BrowserScene: View {
         store.focus(targetID)
         tab.load(trimmed)
         draft = tab.currentURL
+        omniboxOpen = false
         urlFocused = false
         urlEditingTabID = targetID
         selectedSuggestionIndex = nil
@@ -305,6 +316,7 @@ private struct BrowserScene: View {
         case .focus(let id):
             guard let tab = store.tab(id) else { commit(item.url); return }
             store.focus(id)
+            omniboxOpen = false
             urlFocused = false
             selectedSuggestionIndex = nil
             tab.focusForBrowsing()
@@ -314,7 +326,8 @@ private struct BrowserScene: View {
     }
 
     private func dismissOmnibox() {
-        guard urlFocused || selectedSuggestionIndex != nil else { return }
+        guard omniboxOpen || urlFocused || selectedSuggestionIndex != nil else { return }
+        omniboxOpen = false
         urlFocused = false
         selectedSuggestionIndex = nil
         urlEditingTabID = nil

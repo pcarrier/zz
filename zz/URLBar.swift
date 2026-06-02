@@ -32,13 +32,7 @@ struct URLBar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-            field
-                .onChange(of: focused) { _, isFocused in
-                    if isFocused { selectAll() }
-                }
+            editableArea
             Button(action: onFind) {
                 Image(systemName: "text.magnifyingglass")
                     .font(.system(size: 13, weight: .medium))
@@ -69,6 +63,23 @@ struct URLBar: View {
                 .stroke(focused ? Color.accentColor.opacity(0.48) : Color.secondary.opacity(0.18),
                         lineWidth: 0.75)
         )
+    }
+
+    private var editableArea: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            field
+                .onChange(of: focused) { _, isFocused in
+                    if isFocused { selectAll() }
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
+        .onTapGesture {
+            if !focused { focused = true }
+        }
     }
 
     @ViewBuilder

@@ -75,6 +75,8 @@ struct BottomBar: View {
         .padding(.top, 6)
         .padding(.bottom, 2)
         .background(.bar, ignoresSafeAreaEdges: .bottom)
+        .contentShape(.rect)
+        .onTapGesture { }
         .overlay(alignment: .top) {
             Rectangle().fill(.separator.opacity(0.28)).frame(height: 0.5)
         }
