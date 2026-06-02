@@ -173,7 +173,12 @@ private struct BrowserScene: View {
         .statusBarHiddenIfAvailable()
         .onChange(of: store.focusedTabID) { _, _ in
             if !urlFocused { draft = store.focusedTab?.currentURL ?? "" }
-            if urlFocused { urlEditingTabID = store.focusedTabID }
+            // Deliberately do NOT retarget urlEditingTabID here. While the omnibox
+            // is open, clicking a suggestion can leak a mouse-down through to the
+            // pane behind it (the WKWebView focus gesture fires), changing
+            // focusedTabID; retargeting would then commit the URL into that pane
+            // instead of the one active when the omnibox opened. The edit target
+            // is pinned at open time (urlFocused/focusURLBarTrigger onChange).
             selectedSuggestionIndex = nil
         }
         .onChange(of: store.focusedTab?.currentURL ?? "") { _, new in
