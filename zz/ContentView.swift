@@ -335,7 +335,12 @@ private struct BrowserScene: View {
         omniboxOpen = false
         urlFocused = false
         selectedSuggestionIndex = nil
-        urlEditingTabID = nil
+        // Deliberately keep urlEditingTabID: selecting a suggestion can leak a
+        // mouse-down to the pane behind the list, whose onInteraction calls this
+        // dismiss AND refocuses that pane — before the row's mouse-up commit. If
+        // we cleared the target here, commit would fall back to that wrongly
+        // focused pane. The target only matters at commit and is re-captured on
+        // the next omnibox open, so keeping a stale value here is harmless.
         draft = store.focusedTab?.currentURL ?? ""
     }
 
