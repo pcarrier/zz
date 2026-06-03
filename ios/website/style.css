@@ -1,3 +1,5 @@
 html{color-scheme:light dark;font-family:system-ui,sans-serif}
-.shot{display:block;max-width:100%;height:auto}
-.test{display:inline-block;font-size:1.5rem;font-weight:700;border:2px solid;border-radius:.5rem;text-decoration:none}
+.actions{display:flex;gap:.75rem;align-items:center;margin:1rem 0 1.25rem}
+.button{display:inline-flex;align-items:center;justify-content:center;min-height:2.75rem;padding:0 1.25rem;border:1px solid currentColor;border-radius:.75rem;font-size:1rem;font-weight:700;text-decoration:none}
+.button.primary{background:CanvasText;color:Canvas;border-color:CanvasText}
+.shot{display:block;max-width:min(100%,5in);height:auto}
