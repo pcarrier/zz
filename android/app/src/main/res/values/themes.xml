@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Base application theme. This is only the platform shell that the manifest
+      references; Compose drives the real colors via ui/theme/Theme.kt.
+
+      NoActionBar + edge-to-edge friendly: MainActivity calls
+      WindowCompat.setDecorFitsSystemWindows(window, false), so the bars are
+      transparent and content draws behind them.
+    -->
+    <style name="Theme.Zz" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

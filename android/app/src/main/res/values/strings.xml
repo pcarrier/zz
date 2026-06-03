@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">zz</string>
+
+    <!-- History screen. -->
+    <string name="history">History</string>
+    <string name="search_history">Search History</string>
+    <string name="clear_history">Clear History</string>
+    <string name="clear_all">Clear All</string>
+    <string name="no_history">No History</string>
+    <string name="no_results">No Results</string>
+    <string name="done">Done</string>
+    <string name="today">Today</string>
+    <string name="switch_to_tab">Switch to Tab</string>
+
+    <!-- Settings screen. -->
+    <string name="settings">Settings</string>
+    <string name="search">Search</string>
+    <string name="search_engine">Search Engine</string>
+    <string name="keyword_searches">Keyword Searches</string>
+    <string name="add_keyword_search">Add Keyword Search</string>
+    <string name="keyword">Keyword</string>
+    <string name="title">Title</string>
+    <string name="search_url_template">Search URL Template</string>
+    <string name="privacy_and_history">Privacy &amp; History</string>
+    <string name="record_browsing_history">Record Browsing History</string>
+    <string name="record_history">Record History</string>
+    <string name="content">Content</string>
+    <string name="popups">Pop-ups</string>
+    <string name="open_new_windows">Open New Windows</string>
+    <string name="apply">Apply</string>
+    <string name="close">Close</string>
+    <string name="delete">Delete</string>
+
+    <!-- Navigation / toolbar. -->
+    <string name="back">Back</string>
+    <string name="forward">Forward</string>
+    <string name="reload">Reload</string>
+    <string name="stop">Stop</string>
+    <string name="more">More</string>
+
+    <!-- Tile / pane menu. -->
+    <string name="copy_url">Copy URL</string>
+    <string name="duplicate_tile">Duplicate Tile</string>
+    <string name="close_tile">Close tile</string>
+    <string name="park">Park</string>
+    <string name="request_desktop_site">Request Desktop Site</string>
+    <string name="suspend_media">Suspend Media</string>
+    <string name="resume_media">Resume Media</string>
+    <string name="horizontal_split">Horizontal Split</string>
+    <string name="equalize_group">Equalize Group</string>
+    <string name="rotate_group">Rotate Group</string>
+    <string name="select_parent_group">Select Parent Group</string>
+
+    <!-- Layout. -->
+    <string name="layout">Layout</string>
+    <string name="layouts">Layouts</string>
+    <string name="save_current_layout">Save Current Layout…</string>
+    <string name="restore_layout">Restore layout</string>
+    <string name="sidebar">Sidebar</string>
+
+    <!-- Multi-window (deferred in v1; see ANDROID_ARCH.md §9). -->
+    <string name="new_window">New Window</string>
+    <string name="new_window_unavailable">New windows are not available in this version.</string>
+</resources>
