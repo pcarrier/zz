@@ -228,10 +228,11 @@ class WebViewContainer(context: Context) : FrameLayout(context) {
         reservedTopInsetPx = target
         setPadding(paddingLeft, target, paddingRight, paddingBottom)
 
-        if (wasPinnedToTop && webView != null) {
+        webView?.let {
+            if (!wasPinnedToTop) return@let
             // Re-pin to the top so the freshly-inset content stays flush (the analog of
             // iOS `setContentOffset(y: -targetTopInset)`).
-            webView.scrollTo(webView.scrollX, 0)
+            it.scrollTo(it.scrollX, 0)
         }
     }
 

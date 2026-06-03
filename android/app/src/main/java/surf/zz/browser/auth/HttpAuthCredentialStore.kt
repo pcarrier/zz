@@ -1,5 +1,6 @@
 package surf.zz.browser.auth
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
@@ -76,6 +77,7 @@ class HttpAuthCredentialStore private constructor(
      *    navigation that reuses an unchanged credential; here it avoids a
      *    redundant encrypt + `commit()`.
      */
+    @SuppressLint("ApplySharedPref")
     fun set(credential: StoredHttpAuthCredential, key: HttpAuthKey) {
         if (credential.user.isEmpty() && credential.password.isEmpty()) return
 
@@ -100,6 +102,7 @@ class HttpAuthCredentialStore private constructor(
      * Removes any stored credential for [key]. A no-op if none is stored, matching
      * Swift `remove(for:)` (`SecItemDelete` on a missing item is benign).
      */
+    @SuppressLint("ApplySharedPref")
     fun remove(key: HttpAuthKey) {
         prefs.edit().remove(key.account).commit()
     }

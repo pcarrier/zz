@@ -14,8 +14,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ManageSearch
 import androidx.compose.material.icons.filled.Cancel
-import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
@@ -60,11 +60,11 @@ fun UrlBar(
     onTextChange: (String) -> Unit,
     focused: Boolean,
     onFocusChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
     placeholder: String = "Search or enter URL",
     findEnabled: Boolean = true,
     onFind: () -> Unit = {},
     onSubmit: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     val focusRequester = remember { FocusRequester() }
 
@@ -180,7 +180,7 @@ fun UrlBar(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Filled.ManageSearch,
+                imageVector = Icons.AutoMirrored.Filled.ManageSearch,
                 contentDescription = "Find on Page",
                 modifier = Modifier.size(18.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,

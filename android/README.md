@@ -33,6 +33,12 @@ agents must follow its contracts so independently ported files compile together.
 
 ## Build
 
+For a reproducible JDK/Android SDK environment, run this once from `/src/zz`:
+
+```sh
+nix develop
+```
+
 From `/src/zz/android`:
 
 ```sh

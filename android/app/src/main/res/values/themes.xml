@@ -6,11 +6,11 @@
 
       NoActionBar + edge-to-edge friendly: MainActivity calls
       WindowCompat.setDecorFitsSystemWindows(window, false), so the bars are
-      transparent and content draws behind them.
+      transparent and content draws behind them. Display-cutout mode is added in
+      values-v27 because the platform attribute does not exist on minSdk 26.
     -->
-    <style name="Theme.Zz" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.Zz" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
 </resources>

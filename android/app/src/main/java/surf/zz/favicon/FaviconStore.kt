@@ -122,8 +122,8 @@ class FaviconStore(filesDir: File) {
             val entries = runCatching { ZzJson.decodeFromString<List<Entry>>(text) }.getOrNull()
             if (entries != null) {
                 for (e in entries) {
-                    order.add(e.host)
-                    fileNames[e.host] = e.fileName // uniquing: last write wins
+                    fileNames[e.host] = e.fileName
+                    touch(e.host) // uniquing: last write wins, with one LRU slot
                 }
             } else {
                 val legacy = runCatching {
@@ -210,7 +210,7 @@ class FaviconStore(filesDir: File) {
 
     /** Promote [host] to most-recently-used (move to end of [order]). */
     private fun touch(host: String) {
-        order.remove(host)
+        order.removeAll { it == host }
         order.add(host)
     }
 

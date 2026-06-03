@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -115,7 +116,7 @@ class MainActivity : ComponentActivity() {
 
     // Re-delivered while the Activity is alive (launchMode=singleTask): keep the
     // current intent and bump the trigger so the LaunchedEffect re-runs.
-    private var intentState by mutableStateOf(0)
+    private var intentState by mutableIntStateOf(0)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -126,10 +127,14 @@ class MainActivity : ComponentActivity() {
     private fun loadOrCreateWindowId(): WindowID = runBlocking {
         val store = windowDataStore
         val existing = store.data.first()[WINDOW_ID_KEY]
-        val id = existing ?: UUID.randomUUID().toString().also { fresh ->
-            store.edit { it[WINDOW_ID_KEY] = fresh }
-        }
-        WindowID(UUID.fromString(id))
+
+        val id = existing
+            ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+            ?: UUID.randomUUID().also { fresh ->
+                store.edit { it[WINDOW_ID_KEY] = fresh.toString() }
+            }
+
+        WindowID(id)
     }
 }
 

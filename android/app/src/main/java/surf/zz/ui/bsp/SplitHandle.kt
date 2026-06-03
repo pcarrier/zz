@@ -81,16 +81,17 @@ fun SplitHandle(
                     }
                     // Throttle WebView relayout during drag (~60Hz).
                     val now = System.nanoTime()
-                    if (now - lastEmitNanos < 16_666_666L) return@onDrag
-                    lastEmitNanos = now
-                    // Capture the baseline exactly once per gesture. onDrag fires
-                    // every frame; calling onBegin each frame would re-capture an
-                    // already-moved ratio and double-count the translation.
-                    if (!didBegin) {
-                        didBegin = true
-                        onBegin()
+                    if (now - lastEmitNanos >= 16_666_666L) {
+                        lastEmitNanos = now
+                        // Capture the baseline exactly once per gesture. onDrag fires
+                        // every frame; calling onBegin each frame would re-capture an
+                        // already-moved ratio and double-count the translation.
+                        if (!didBegin) {
+                            didBegin = true
+                            onBegin()
+                        }
+                        onTranslate(cumulative)
                     }
-                    onTranslate(cumulative)
                 },
                 onDragEnd = {
                     // Mirror SwiftUI's .onEnded exactly: emit the final cumulative

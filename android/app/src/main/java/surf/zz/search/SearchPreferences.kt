@@ -62,8 +62,8 @@ object SearchPreferences {
 
     val defaultEngine: SearchEngine = SearchEngine.DUCK_DUCK_GO
 
-    /** `SearchEngine.duckDuckGo.template!` — non-null for the built-in engine. */
-    val defaultCustomTemplate: String = SearchEngine.DUCK_DUCK_GO.template!!
+    /** Built-in default template; non-null by the [SearchEngine] contract. */
+    val defaultCustomTemplate: String = requireNotNull(defaultEngine.template)
 
     /**
      * Seeded so users discover the feature; safe because they share no keyword

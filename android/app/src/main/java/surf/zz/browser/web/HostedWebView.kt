@@ -42,12 +42,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 @Composable
 fun HostedWebView(
     webView: WebView,
+    modifier: Modifier = Modifier,
     onInteraction: (() -> Unit)? = null,
     dropHandler: PaneDropHandler? = null,
     shouldHost: () -> Boolean = { true },
     reservesTopSafeArea: Boolean = true,
     layoutRevision: Int = 0,
-    modifier: Modifier = Modifier,
 ) {
     AndroidView(
         modifier = modifier,

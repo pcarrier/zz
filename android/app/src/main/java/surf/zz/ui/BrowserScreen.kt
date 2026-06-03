@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
@@ -45,11 +46,11 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import surf.zz.favicon.FaviconStore
 import surf.zz.layout.BspNode
-import surf.zz.layout.LayoutPresetLogic
 import surf.zz.model.WindowID
 import surf.zz.omnibox.OmniboxItem
 import surf.zz.omnibox.OmniboxRoute
 import surf.zz.store.HistoryStore
+import surf.zz.store.LayoutPresetLogic
 import surf.zz.store.LayoutPresetStore
 import surf.zz.ui.bottombar.BottomBar
 import surf.zz.ui.bsp.BspView
@@ -254,7 +255,7 @@ fun BrowserScreen(
 
     // onChange(of: store.focusURLBarTrigger): pin the edit target and request focus.
     LaunchedEffect(store) {
-        snapshotFlow { store.focusURLBarTrigger }
+        snapshotFlow { store.focusUrlBarTrigger }
             .distinctUntilChanged()
             .collectLatest {
                 urlEditingTabId = store.focusedTabID
@@ -433,7 +434,7 @@ fun BrowserScreen(
             HistoryScreen(onOpen = { url ->
                 historyPresented = false
                 commit(url)
-            })
+            }, onDismiss = { historyPresented = false })
         }
     }
 
@@ -570,7 +571,7 @@ private fun LifecycleStopFlush(owner: LifecycleOwner, onStop: () -> Unit) {
  * back to [WindowWidthSizeClass.Compact] when the context is not an Activity (e.g.
  * previews), matching the iOS phone default of a compact layout.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Composable
 private fun currentWindowWidthSizeClass(): WindowWidthSizeClass {
     val context = LocalContext.current

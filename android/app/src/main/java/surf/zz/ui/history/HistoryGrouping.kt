@@ -69,7 +69,7 @@ object HistoryGrouping {
         if (day == now) return "Today"
         if (day == now.minusDays(1)) return "Yesterday"
         val formatter = if (day.year == now.year) {
-            SAME_YEAR_FORMATTER
+            sameYearFormatter()
         } else {
             DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG).withLocale(Locale.getDefault())
         }
@@ -77,6 +77,6 @@ object HistoryGrouping {
     }
 
     /** Matches the Swift `"EEEE, MMMM d"` pattern; uses the default locale for names. */
-    private val SAME_YEAR_FORMATTER: DateTimeFormatter =
+    private fun sameYearFormatter(): DateTimeFormatter =
         DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault())
 }

@@ -4,6 +4,8 @@ import android.widget.Toast
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.RotateRight
+import androidx.compose.material.icons.automirrored.filled.ViewQuilt
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Close
@@ -17,14 +19,12 @@ import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerticalSplit
 import androidx.compose.material.icons.filled.HorizontalSplit
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.SaveAlt
-import androidx.compose.material.icons.filled.ViewQuilt
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -250,7 +250,7 @@ private fun FocusedPaneActions(
             checked = tab.isMediaSuspended,
             onCheckedChange = {
                 onOutsideUrlBarInteraction()
-                tab.setMediaSuspended(it)
+                tab.updateMediaSuspended(it)
             },
         )
     }
@@ -284,7 +284,7 @@ private fun LayoutSubmenu(
     var open by remember { mutableStateOf(false) }
     SubmenuAnchor(
         label = "Layout",
-        icon = Icons.Filled.ViewQuilt,
+        icon = Icons.AutoMirrored.Filled.ViewQuilt,
         open = open,
         onOpenChange = { open = it },
     ) {
@@ -308,7 +308,7 @@ private fun LayoutSubmenu(
         )
         DropdownMenuItem(
             text = { Text("Rotate Group") },
-            leadingIcon = { MenuIcon(Icons.Filled.RotateRight) },
+            leadingIcon = { MenuIcon(Icons.AutoMirrored.Filled.RotateRight) },
             enabled = store.canTransformSelectedGroup,
             onClick = {
                 open = false

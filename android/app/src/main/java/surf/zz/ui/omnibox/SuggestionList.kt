@@ -77,9 +77,9 @@ private val rowHeight: Dp = 48.dp
 @Composable
 fun SuggestionList(
     suggestions: List<OmniboxItem>,
+    modifier: Modifier = Modifier,
     selectedIndex: Int? = null,
     onSelect: (OmniboxItem) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
 

@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import android.webkit.WebView
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -18,6 +20,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import surf.zz.browser.tab.PageZoom
 import surf.zz.browser.tab.ScrollOffset
 import surf.zz.browser.tab.Tab
@@ -112,7 +116,7 @@ class BrowserStore(
     var parked: List<UUID> by mutableStateOf(emptyList())
         private set
 
-    var sidebarWidth: Double by mutableStateOf(220.0)
+    var sidebarWidth: Double by mutableDoubleStateOf(220.0)
         private set
 
     /** Live tabs keyed by id. `mutableStateMapOf` mirrors the Swift `[UUID: Tab]` `@Observable` dict. */
@@ -123,7 +127,7 @@ class BrowserStore(
      * read by a SwiftUI `.onChange`; here it is observed via a `LaunchedEffect(key =
      * focusUrlBarTrigger)`. Bump with `++` (the `&+=` overflow-add is just `++`).
      */
-    var focusUrlBarTrigger: Int by mutableStateOf(0)
+    var focusUrlBarTrigger: Int by mutableIntStateOf(0)
         private set
 
     var zoomedTabID: UUID? by mutableStateOf(null)
@@ -272,7 +276,7 @@ class BrowserStore(
         get() {
             val sel = selectedGroupID
             if (sel != null && root.containsSplit(sel)) {
-                return root.parentSplitID(containingSplit = sel) != null
+                return root.parentSplitIDOfSplit(sel) != null
             }
             val focused = focusedTabID ?: return false
             return root.parentSplitID(containingTab = focused) != null
@@ -322,6 +326,7 @@ class BrowserStore(
     private fun makeBlankTabForPopup(): UUID = makeBlankTab()
 
     fun focus(tabID: UUID) {
+        if (tabs[tabID] == null) return
         selectedGroupID = null
         focusedTabID = tabID
         scheduleSave()
@@ -335,7 +340,7 @@ class BrowserStore(
     fun selectParentGroup() {
         val sel = selectedGroupID
         if (sel != null && root.containsSplit(sel)) {
-            val parentID = root.parentSplitID(containingSplit = sel) ?: return
+            val parentID = root.parentSplitIDOfSplit(sel) ?: return
             selectedGroupID = parentID
             return
         }
@@ -557,7 +562,7 @@ class BrowserStore(
         scheduleSave()
     }
 
-    fun setSidebarWidth(width: Double) {
+    fun updateSidebarWidth(width: Double) {
         sidebarWidth = width.coerceIn(0.0, 520.0)
         scheduleSave()
     }
@@ -589,16 +594,16 @@ class BrowserStore(
 
     fun zoomInFocused() {
         val tab = focusedTab ?: return
-        tab.setPageZoom(PageZoom.zoomedIn(tab.pageZoom))
+        tab.updatePageZoom(PageZoom.zoomedIn(tab.pageZoom))
     }
 
     fun zoomOutFocused() {
         val tab = focusedTab ?: return
-        tab.setPageZoom(PageZoom.zoomedOut(tab.pageZoom))
+        tab.updatePageZoom(PageZoom.zoomedOut(tab.pageZoom))
     }
 
     fun resetZoomFocused() {
-        focusedTab?.setPageZoom(PageZoom.defaultLevel)
+        focusedTab?.updatePageZoom(PageZoom.defaultLevel)
     }
 
     fun toggleZoom() {
@@ -692,6 +697,7 @@ class BrowserStore(
     }
 
     fun discardParked(parkedTabID: UUID) {
+        if (parkedTabID !in parked) return
         if (zoomedTabID == parkedTabID) zoomedTabID = null
         parked = parked.filter { it != parkedTabID }
         tabs.remove(parkedTabID)?.close()
@@ -906,7 +912,12 @@ class BrowserStore(
         for (key in tabs.keys.toList()) {
             if (key !in parkedSet) tabs.remove(key)?.close()
         }
-        for ((id, tab) in loadedTabs) tabs[id] = tab
+        for ((id, tab) in loadedTabs) {
+            val replaced = tabs.put(id, tab)
+            if (replaced != null && replaced !== tab) {
+                replaced.close()
+            }
+        }
         root = newRoot
         // A preset may reference a tab id that is currently parked. After the swap such
         // an id lives in both root and parked, violating disjointness; reconcile parked

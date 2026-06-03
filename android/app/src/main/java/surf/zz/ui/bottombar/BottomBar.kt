@@ -13,11 +13,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.ViewSidebar
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.HorizontalSplit
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.VerticalSplit
-import androidx.compose.material.icons.filled.ViewSidebar
 import androidx.compose.material.icons.filled.ZoomInMap
 import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material3.MaterialTheme
@@ -194,7 +194,7 @@ fun BottomBar(
                             onOutsideUrlBarInteraction = onOutsideUrlBarInteraction,
                         )
                         BarIconButton(
-                            icon = Icons.Filled.ViewSidebar,
+                            icon = Icons.AutoMirrored.Filled.ViewSidebar,
                             enabled = store.parked.isNotEmpty(),
                             onClick = {
                                 runOutsideUrlBarInteraction(onOutsideUrlBarInteraction) {

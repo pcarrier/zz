@@ -72,7 +72,7 @@ class TabWebViewClient(private val tab: Tab) : WebViewClient() {
      * recording is gated on `!isRestoring` and a settled load.
      */
     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-        tab.setLoading(true)
+        tab.updateLoading(true)
         syncNavigationState(view, url)
     }
 
@@ -107,7 +107,7 @@ class TabWebViewClient(private val tab: Tab) : WebViewClient() {
      * which on iOS came from the KVO observers.
      */
     override fun onPageFinished(view: WebView, url: String?) {
-        tab.setLoading(false)
+        tab.updateLoading(false)
         syncNavigationState(view, url)
         // Re-applies pageZoom + media suspension + the deferred scroll restore, and
         // clears the in-flight / restoring flags (with the deferred restore-clear).

@@ -108,12 +108,12 @@ sealed interface BspNode {
         }
     }
 
-    fun parentSplitID(containingSplit: UUID): UUID? = when (this) {
+    fun parentSplitIDOfSplit(childSplitID: UUID): UUID? = when (this) {
         is Leaf -> null
         is Split -> {
-            if (first.id == containingSplit || second.id == containingSplit) id
-            else first.parentSplitID(containingSplit = containingSplit)
-                ?: second.parentSplitID(containingSplit = containingSplit)
+            if (first.id == childSplitID || second.id == childSplitID) id
+            else first.parentSplitIDOfSplit(childSplitID)
+                ?: second.parentSplitIDOfSplit(childSplitID)
         }
     }
 

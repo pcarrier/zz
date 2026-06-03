@@ -2,7 +2,6 @@ package surf.zz.browser.tab
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import android.view.View
 import android.webkit.GeolocationPermissions
@@ -12,6 +11,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
@@ -103,14 +103,14 @@ class Tab(
 
     var isLoading: Boolean by mutableStateOf(false)
 
-    var estimatedProgress: Double by mutableStateOf(0.0)
+    var estimatedProgress: Double by mutableDoubleStateOf(0.0)
 
     /**
-     * CSS-zoom level. Set via [setPageZoom]; the owner clamps at the assignment
+     * CSS-zoom level. Set via [updatePageZoom]; the owner clamps at the assignment
      * sites (init and `BrowserStore.zoomIn/Out/resetFocused`), mirroring the iOS
      * note that clamping must not happen inside the `didSet`.
      */
-    var pageZoom: Double by mutableStateOf(PageZoom.defaultLevel)
+    var pageZoom: Double by mutableDoubleStateOf(PageZoom.defaultLevel)
         private set
 
     /** "Request Desktop Site" content mode. Set via [setRequestsDesktopSite]. */
@@ -118,7 +118,7 @@ class Tab(
         private set
 
     /**
-     * Per-pane media suspension. Set via [setMediaSuspended]. Pauses/resumes all
+     * Per-pane media suspension. Set via [updateMediaSuspended]. Pauses/resumes all
      * media in the WebView; mirrors the iOS `setAllMediaPlaybackSuspended(_:)`.
      */
     var isMediaSuspended: Boolean by mutableStateOf(false)
@@ -225,6 +225,7 @@ class Tab(
 
     // ---- The owned WebView ----------------------------------------------------
 
+    @Suppress("DEPRECATION")
     @SuppressLint("SetJavaScriptEnabled")
     val webView: WebView = WebView(context.applicationContext).also { view ->
         view.settings.apply {
@@ -254,14 +255,14 @@ class Tab(
 
         // Restore the persisted zoom level. onPersistenceChange is still null here,
         // so the persistence notify in setPageZoom is a no-op during construction.
-        setPageZoom(PageZoom.clamp(pageZoom))
+        updatePageZoom(PageZoom.clamp(pageZoom))
         applyPageZoom()
         // Restore the persisted content mode without an explicit reload: the initial
         // load below already picks it up, and a blank tab has nothing to reload.
         setRequestsDesktopSite(requestsDesktopSite, reload = false)
         applyDesktopSitePreference(reload = false)
         // Restore the persisted media-suspension state.
-        setMediaSuspended(mediaSuspended)
+        updateMediaSuspended(mediaSuspended)
         applyMediaSuspension()
 
         if (url.isNotEmpty()) {
@@ -437,7 +438,7 @@ class Tab(
      * like the iOS `didSet`. The caller clamps (the iOS note: never clamp inside
      * the setter to avoid re-entrant recursion).
      */
-    fun setPageZoom(level: Double) {
+    fun updatePageZoom(level: Double) {
         if (pageZoom == level) return
         pageZoom = level
         applyPageZoom()
@@ -453,7 +454,7 @@ class Tab(
     }
 
     /** Sets [isMediaSuspended] and applies the suspension. Mirrors iOS `didSet`. */
-    fun setMediaSuspended(value: Boolean) {
+    fun updateMediaSuspended(value: Boolean) {
         if (isMediaSuspended == value) return
         isMediaSuspended = value
         applyMediaSuspension()
@@ -633,7 +634,7 @@ class Tab(
     }
 
     /** Sets [isLoading] (iOS `\.isLoading` KVO). */
-    fun setLoading(loading: Boolean) {
+    fun updateLoading(loading: Boolean) {
         isLoading = loading
     }
 
@@ -832,15 +833,12 @@ class Tab(
 
     /**
      * Reads WebView's own credential cache (the `URLCredentialStorage` analog).
-     * Uses the non-deprecated [WebView.getHttpAuthUsernamePassword] on API 26+.
+     * WebView's HTTP-auth cache API is deprecated but still the only per-WebView
+     * cache hook; the encrypted credential store remains the durable source of truth.
      */
+    @Suppress("DEPRECATION")
     private fun webViewCachedCredential(host: String, realm: String?): HttpAuthCredential? {
-        val pair: Array<String>? =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                webView.getHttpAuthUsernamePassword(host, realm ?: "")
-            } else {
-                null
-            }
+        val pair: Array<String>? = webView.getHttpAuthUsernamePassword(host, realm ?: "")
         val user = pair?.getOrNull(0) ?: return null
         val password = pair.getOrNull(1) ?: return null
         if (user.isEmpty() && password.isEmpty()) return null
@@ -848,15 +846,14 @@ class Tab(
     }
 
     /** Mirrors writes into WebView's in-process cache (iOS URLCredentialStorage set). */
+    @Suppress("DEPRECATION")
     private fun primeWebViewCache(key: HttpAuthKey, credential: HttpAuthCredential) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            webView.setHttpAuthUsernamePassword(
-                key.host,
-                key.realm,
-                credential.user,
-                credential.password,
-            )
-        }
+        webView.setHttpAuthUsernamePassword(
+            key.host,
+            key.realm,
+            credential.user,
+            credential.password,
+        )
     }
 
     // ---- Teardown -------------------------------------------------------------

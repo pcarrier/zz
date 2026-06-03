@@ -47,6 +47,11 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    lint {
+        // Dependency versions are intentionally pinned to ANDROID_ARCH.md's baseline.
+        disable += "GradleDependency"
+    }
 }
 
 dependencies {
