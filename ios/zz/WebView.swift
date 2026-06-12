@@ -7,6 +7,12 @@ import UIKit
 import AppKit
 #endif
 
+private enum HostedWebViewMetrics {
+    static let interactionDedupInterval: CFTimeInterval = 0.1
+    static let macPressMinimumDuration: TimeInterval = 0
+    static let macPressAllowableMovement: CGFloat = 4
+}
+
 enum PaneDropPayload {
     case url(String)
     case parkedTab(UUID)
@@ -127,7 +133,7 @@ extension _Representable {
             let result = super.hitTest(point, with: event)
             if countsAsClickToFocus(event), let r = result, r !== self {
                 let now = CACurrentMediaTime()
-                if now - lastInteractionAt > 0.1 {
+                if now - lastInteractionAt > HostedWebViewMetrics.interactionDedupInterval {
                     lastInteractionAt = now
                     onInteraction?()
                 }
@@ -346,8 +352,8 @@ extension _Representable {
             wantsLayer = true
             let press = NSPressGestureRecognizer(target: self,
                                                  action: #selector(handleInteraction(_:)))
-            press.minimumPressDuration = 0
-            press.allowableMovement = 4
+            press.minimumPressDuration = HostedWebViewMetrics.macPressMinimumDuration
+            press.allowableMovement = HostedWebViewMetrics.macPressAllowableMovement
             press.delaysPrimaryMouseButtonEvents = false
             press.delegate = self
             addGestureRecognizer(press)

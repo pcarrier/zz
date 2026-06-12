@@ -8,6 +8,30 @@ import UIKit
 import AppKit
 #endif
 
+private enum TileMetrics {
+    static let progressLowerBound: Double = 0
+    static let progressUpperBound: Double = 1
+    static let progressBarHeight: CGFloat = 2
+
+    static let mediaIndicatorOuterPadding: CGFloat = 8
+    static let mediaIndicatorInnerPadding: CGFloat = 6
+    static let mediaIndicatorBackgroundOpacity: Double = 0.55
+
+    static let navigationErrorSpacing: CGFloat = 10
+    static let navigationErrorURLLineLimit = 2
+    static let navigationErrorCornerRadius: CGFloat = 8
+
+    static let emptyTileOpacity: Double = 0.05
+
+    static let dropZoneClearDelay: Duration = .milliseconds(900)
+    static let dropEdgeThreshold: CGFloat = 0.15
+    static let dropIndicatorFillOpacity: Double = 0.18
+    static let dropIndicatorStrokeWidth: CGFloat = 2
+    static let dropIndicatorCenterInset: CGFloat = 0.18
+    static let dropIndicatorSplitFraction: CGFloat = 0.5
+    static let fullFraction: CGFloat = 1
+}
+
 struct TileView: View {
     let tabID: UUID
     var onOutsideURLBarInteraction: () -> Void = {}
@@ -64,20 +88,22 @@ struct TileView: View {
         .clipped()
         .overlay(alignment: .top) {
             if tab.isLoading,
-               tab.estimatedProgress > 0, tab.estimatedProgress < 1 {
+               tab.estimatedProgress > TileMetrics.progressLowerBound,
+               tab.estimatedProgress < TileMetrics.progressUpperBound {
                 GeometryReader { proxy in
                     Rectangle()
                         .fill(Color.accentColor)
-                        .frame(width: proxy.size.width * tab.estimatedProgress, height: 2)
+                        .frame(width: proxy.size.width * tab.estimatedProgress,
+                               height: TileMetrics.progressBarHeight)
                 }
-                .frame(height: 2)
+                .frame(height: TileMetrics.progressBarHeight)
                 .allowsHitTesting(false)
             }
         }
         .overlay(alignment: .bottomTrailing) {
             if let symbol = mediaIndicatorSymbol(for: tab) {
                 MediaIndicator(systemImage: symbol)
-                    .padding(8)
+                    .padding(TileMetrics.mediaIndicatorOuterPadding)
                     .allowsHitTesting(false)
             }
         }
@@ -85,6 +111,13 @@ struct TileView: View {
             if let zone = dropState.zone {
                 DropZoneIndicator(zone: zone)
                     .allowsHitTesting(false)
+            }
+        }
+        .overlay {
+            if let error = tab.navigationError {
+                NavigationErrorView(error: error) {
+                    tab.load(error.url)
+                }
             }
         }
         .overlay {
@@ -127,6 +160,37 @@ struct TileView: View {
     }
 }
 
+private struct NavigationErrorView: View {
+    let error: NavigationError
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(spacing: TileMetrics.navigationErrorSpacing) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text("Can't Open Page")
+                .font(.headline)
+            Text(error.url)
+                .font(.caption.monospaced())
+                .lineLimit(TileMetrics.navigationErrorURLLineLimit)
+                .truncationMode(.middle)
+                .foregroundStyle(.secondary)
+            Text(error.message)
+                .font(.caption)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            Button("Retry", action: retry)
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial,
+                    in: RoundedRectangle(cornerRadius: TileMetrics.navigationErrorCornerRadius,
+                                         style: .continuous))
+        .padding()
+    }
+}
+
 private struct MediaIndicator: View {
     let systemImage: String
 
@@ -134,8 +198,8 @@ private struct MediaIndicator: View {
         Image(systemName: systemImage)
             .font(.caption.weight(.semibold))
             .foregroundStyle(.white)
-            .padding(6)
-            .background(.black.opacity(0.55), in: Circle())
+            .padding(TileMetrics.mediaIndicatorInnerPadding)
+            .background(.black.opacity(TileMetrics.mediaIndicatorBackgroundOpacity), in: Circle())
     }
 }
 
@@ -153,7 +217,7 @@ private struct EmptyTileState: View {
     var onTap: () -> Void
 
     var body: some View {
-        Color.secondary.opacity(0.05)
+        Color.secondary.opacity(TileMetrics.emptyTileOpacity)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(.rect)
             .onTapGesture(perform: onTap)
@@ -193,7 +257,7 @@ final class TileDropState {
     private func scheduleClear() {
         clearTask?.cancel()
         clearTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(900))
+            try? await Task.sleep(for: TileMetrics.dropZoneClearDelay)
             guard !Task.isCancelled else { return }
             zone = nil
             clearTask = nil
@@ -207,12 +271,12 @@ private func dropZone(at location: CGPoint, in size: CGSize) -> DropZone {
     let yFrac = location.y / size.height
 
     let dLeft = xFrac
-    let dRight = 1 - xFrac
+    let dRight = TileMetrics.fullFraction - xFrac
     let dTop = yFrac
-    let dBottom = 1 - yFrac
+    let dBottom = TileMetrics.fullFraction - yFrac
     let minDist = min(dLeft, dRight, dTop, dBottom)
 
-    if minDist > 0.15 { return .center }
+    if minDist > TileMetrics.dropEdgeThreshold { return .center }
     if minDist == dTop { return .top }
     if minDist == dBottom { return .bottom }
     if minDist == dLeft { return .left }
@@ -396,8 +460,11 @@ private struct DropZoneIndicator: View {
             let h = proxy.size.height
             let frame = targetFrame(width: w, height: h)
             Rectangle()
-                .fill(Color.accentColor.opacity(0.18))
-                .overlay(Rectangle().strokeBorder(Color.accentColor, lineWidth: 2))
+                .fill(Color.accentColor.opacity(TileMetrics.dropIndicatorFillOpacity))
+                .overlay(Rectangle().strokeBorder(
+                    Color.accentColor,
+                    lineWidth: TileMetrics.dropIndicatorStrokeWidth
+                ))
                 .frame(width: frame.width, height: frame.height)
                 .position(x: frame.midX, y: frame.midY)
         }
@@ -406,18 +473,22 @@ private struct DropZoneIndicator: View {
     private func targetFrame(width w: CGFloat, height h: CGFloat) -> CGRect {
         switch zone {
         case .center:
-            let inset: CGFloat = 0.18
+            let inset = TileMetrics.dropIndicatorCenterInset
             return CGRect(x: w * inset, y: h * inset,
-                          width: w * (1 - 2 * inset),
-                          height: h * (1 - 2 * inset))
+                          width: w * (TileMetrics.fullFraction - 2 * inset),
+                          height: h * (TileMetrics.fullFraction - 2 * inset))
         case .top:
-            return CGRect(x: 0, y: 0, width: w, height: h * 0.5)
+            return CGRect(x: 0, y: 0, width: w,
+                          height: h * TileMetrics.dropIndicatorSplitFraction)
         case .bottom:
-            return CGRect(x: 0, y: h * 0.5, width: w, height: h * 0.5)
+            return CGRect(x: 0, y: h * TileMetrics.dropIndicatorSplitFraction,
+                          width: w, height: h * TileMetrics.dropIndicatorSplitFraction)
         case .left:
-            return CGRect(x: 0, y: 0, width: w * 0.5, height: h)
+            return CGRect(x: 0, y: 0,
+                          width: w * TileMetrics.dropIndicatorSplitFraction, height: h)
         case .right:
-            return CGRect(x: w * 0.5, y: 0, width: w * 0.5, height: h)
+            return CGRect(x: w * TileMetrics.dropIndicatorSplitFraction, y: 0,
+                          width: w * TileMetrics.dropIndicatorSplitFraction, height: h)
         }
     }
 }

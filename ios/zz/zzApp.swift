@@ -18,7 +18,8 @@ struct zzApp: App {
         }
         #if os(macOS)
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 1280, height: 860)
+        .defaultSize(width: AppMetrics.Window.defaultSize.width,
+                     height: AppMetrics.Window.defaultSize.height)
         #endif
         .commands {
             CommandGroup(replacing: .toolbar)        { }

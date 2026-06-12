@@ -1,6 +1,16 @@
 import SwiftUI
 
-private let splitHandleHitThickness: CGFloat = 14
+private enum BSPMetrics {
+    static let splitHandleHitThickness: CGFloat = 14
+    static let selectedGroupOutlinePadding: CGFloat = 1
+    static let defaultSplitHandleThickness: CGFloat = 12
+    static let dividerLineThickness: CGFloat = 0.5
+    static let dragMinimumDistance: CGFloat = 2
+    static let dragUpdateFramesPerSecond: CFTimeInterval = 60
+    static var dragUpdateMinimumInterval: CFTimeInterval {
+        1.0 / dragUpdateFramesPerSecond
+    }
+}
 
 struct BSPView: View {
     let node: BSPNode
@@ -61,7 +71,7 @@ struct BSPView: View {
     private func splitHandle(id: UUID, axis: BSPNode.Axis, usable: CGFloat) -> some View {
         SplitHandle(
             axis: axis,
-            thickness: splitHandleHitThickness,
+            thickness: BSPMetrics.splitHandleHitThickness,
             onSelect:    {
                 onOutsideURLBarInteraction()
                 store.selectGroup(id)
@@ -81,13 +91,13 @@ private struct SelectedGroupOutline: View {
         Rectangle()
             .stroke(Color.textSelection,
                     lineWidth: PaneSelectionVisual.strokeWidth)
-            .padding(1)
+            .padding(BSPMetrics.selectedGroupOutlinePadding)
     }
 }
 
 struct SplitHandle: View {
     let axis: BSPNode.Axis
-    var thickness: CGFloat = 12
+    var thickness: CGFloat = BSPMetrics.defaultSplitHandleThickness
     var onSelect: () -> Void = {}
     var onBegin: () -> Void = {}
     let onTranslate: (CGFloat) -> Void
@@ -104,8 +114,8 @@ struct SplitHandle: View {
             .overlay {
                 Rectangle()
                     .fill(.separator)
-                    .frame(width: axis == .vertical ? 0.5 : nil,
-                           height: axis == .horizontal ? 0.5 : nil)
+                    .frame(width: axis == .vertical ? BSPMetrics.dividerLineThickness : nil,
+                           height: axis == .horizontal ? BSPMetrics.dividerLineThickness : nil)
             }
             .contentShape(.rect)
             .simultaneousGesture(
@@ -113,12 +123,13 @@ struct SplitHandle: View {
             )
             .gesture(
                 // Global coordinates avoid feedback as the divider moves.
-                DragGesture(minimumDistance: 2, coordinateSpace: .global)
+                DragGesture(minimumDistance: BSPMetrics.dragMinimumDistance,
+                            coordinateSpace: .global)
                     .updating($gestureActive) { _, state, _ in state = true }
                     .onChanged { value in
                         // Throttle WKWebView relayout during drag.
                         let now = CACurrentMediaTime()
-                        if now - lastEmitTime < 1.0 / 60.0 { return }
+                        if now - lastEmitTime < BSPMetrics.dragUpdateMinimumInterval { return }
                         lastEmitTime = now
                         // Capture the baseline exactly once per gesture. onChanged
                         // fires every frame with a cumulative translation, so calling

@@ -58,7 +58,52 @@ enum PaneSelectionVisual {
     static let reservedInset: CGFloat = strokeWidth
 }
 
+nonisolated enum AppMetrics {
+    enum HiddenControl {
+        static let opacity: Double = 0
+        static let size: CGFloat = 0
+    }
+
+    enum Window {
+        static let defaultSize = CGSize(width: 1280, height: 860)
+    }
+
+    enum Sidebar {
+        static let minWidth: Double = 0
+        static let defaultWidth: Double = 220
+        static let maxWidth: Double = 520
+        static var widthRange: ClosedRange<Double> { minWidth...maxWidth }
+
+        static let compactMinWidth: CGFloat = 220
+        static let compactMaxWidth: CGFloat = 320
+        static var compactWidthRange: ClosedRange<CGFloat> {
+            compactMinWidth...compactMaxWidth
+        }
+    }
+
+    enum Split {
+        static let balancedRatio: Double = 0.5
+        static let minRatio: Double = 0.05
+        static let maxRatio: Double = 0.95
+        static var ratioRange: ClosedRange<Double> { minRatio...maxRatio }
+    }
+
+    enum PersistenceDelay {
+        static let browserSnapshot: Duration = .milliseconds(250)
+        static let layoutPresets: Duration = .milliseconds(300)
+        static let history: Duration = .milliseconds(400)
+        static let favicons: Duration = .milliseconds(500)
+    }
+}
+
 // MARK: - Favicons
+
+nonisolated enum FaviconMetrics {
+    static let fetchTimeout: TimeInterval = 8
+    static let defaultIconSize: CGFloat = 16
+    static let imageCornerRadiusScale: CGFloat = 0.18
+    static let fallbackSymbolScale: CGFloat = 0.85
+}
 
 #if canImport(UIKit)
 typealias PlatformImage = UIImage
@@ -326,7 +371,7 @@ final class FaviconStore {
         saveTask?.cancel()
         let snapshot = entriesForSave()
         saveTask = Task {
-            try? await Task.sleep(for: .milliseconds(500))
+            try? await Task.sleep(for: AppMetrics.PersistenceDelay.favicons)
             guard !Task.isCancelled else { return }
             // Assign the generation on the main actor so write ordering matches
             // the order saves were requested; a later flushSave gets a higher
@@ -368,7 +413,7 @@ final class FaviconStore {
         for url in candidates {
             do {
                 var request = URLRequest(url: url)
-                request.timeoutInterval = 8
+                request.timeoutInterval = FaviconMetrics.fetchTimeout
                 let (data, response) = try await URLSession.shared.data(for: request)
                 if let http = response as? HTTPURLResponse,
                    !(200...299).contains(http.statusCode) {
@@ -426,16 +471,20 @@ struct FaviconView: View {
     @Environment(FaviconStore.self) private var favicons
 
     let host: String
-    var size: CGFloat = 16
+    var size: CGFloat = FaviconMetrics.defaultIconSize
     var fallbackSymbol: String = "globe"
 
-    init(url: String, size: CGFloat = 16, fallbackSymbol: String = "globe") {
+    init(url: String,
+         size: CGFloat = FaviconMetrics.defaultIconSize,
+         fallbackSymbol: String = "globe") {
         self.host = URLCanonicalizer.host(url)
         self.size = size
         self.fallbackSymbol = fallbackSymbol
     }
 
-    init(host: String, size: CGFloat = 16, fallbackSymbol: String = "globe") {
+    init(host: String,
+         size: CGFloat = FaviconMetrics.defaultIconSize,
+         fallbackSymbol: String = "globe") {
         self.host = host
         self.size = size
         self.fallbackSymbol = fallbackSymbol
@@ -449,18 +498,20 @@ struct FaviconView: View {
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
                 .frame(width: size, height: size)
-                .clipShape(.rect(cornerRadius: size * 0.18, style: .continuous))
+                .clipShape(.rect(cornerRadius: size * FaviconMetrics.imageCornerRadiusScale,
+                                 style: .continuous))
             #elseif canImport(AppKit)
             Image(nsImage: image)
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
                 .frame(width: size, height: size)
-                .clipShape(.rect(cornerRadius: size * 0.18, style: .continuous))
+                .clipShape(.rect(cornerRadius: size * FaviconMetrics.imageCornerRadiusScale,
+                                 style: .continuous))
             #endif
         } else {
             Image(systemName: fallbackSymbol)
-                .font(.system(size: size * 0.85, weight: .regular))
+                .font(.system(size: size * FaviconMetrics.fallbackSymbolScale, weight: .regular))
                 .foregroundStyle(.secondary)
                 .frame(width: size, height: size)
         }

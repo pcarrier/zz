@@ -1,5 +1,49 @@
-html{color-scheme:light dark;font-family:system-ui,sans-serif}
-.actions{display:flex;gap:.75rem;align-items:center;margin:1rem 0 1.25rem}
-.button{display:inline-flex;align-items:center;justify-content:center;min-height:2.75rem;padding:0 1.25rem;border:1px solid currentColor;border-radius:.75rem;font-size:1rem;font-weight:700;text-decoration:none}
-.button.primary{background:CanvasText;color:Canvas;border-color:CanvasText}
-.shot{display:block;max-width:min(100%,5in);height:auto}
+:root {
+  --action-gap: .75rem;
+  --action-margin-block-start: 1rem;
+  --action-margin-block-end: 1.25rem;
+  --button-min-height: 2.75rem;
+  --button-inline-padding: 1.25rem;
+  --button-border-width: 1px;
+  --button-border-radius: .75rem;
+  --button-font-size: 1rem;
+  --button-font-weight: 700;
+  --screenshot-max-width: 5in;
+}
+
+html {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+.actions {
+  display: flex;
+  gap: var(--action-gap);
+  align-items: center;
+  margin: var(--action-margin-block-start) 0 var(--action-margin-block-end);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--button-min-height);
+  padding: 0 var(--button-inline-padding);
+  border: var(--button-border-width) solid currentColor;
+  border-radius: var(--button-border-radius);
+  font-size: var(--button-font-size);
+  font-weight: var(--button-font-weight);
+  text-decoration: none;
+}
+
+.button.primary {
+  background: CanvasText;
+  color: Canvas;
+  border-color: CanvasText;
+}
+
+.shot {
+  display: block;
+  max-width: min(100%, var(--screenshot-max-width));
+  height: auto;
+}

@@ -22,6 +22,44 @@ private func selectAll() {
     #endif
 }
 
+private enum URLBarMetrics {
+    static let controlSpacing: CGFloat = 6
+    static let editableSpacing: CGFloat = 6
+    static let findIconSize: CGFloat = 13
+    static let searchIconSize: CGFloat = 12
+    static let iconButtonSize: CGFloat = 24
+    static let disabledOpacity: Double = 0.35
+
+    static let horizontalPadding: CGFloat = 9
+    static let verticalPadding: CGFloat = 4
+    static let focusedBackgroundOpacity: Double = 0.14
+    static let backgroundOpacity: Double = 0.10
+    static let cornerRadius: CGFloat = 7
+    static let focusedStrokeOpacity: Double = 0.48
+    static let strokeOpacity: Double = 0.18
+    static let strokeWidth: CGFloat = 0.75
+
+    static let maxVisibleSuggestionRows = 5
+    static let suggestionDividerOpacity: Double = 0.4
+    static let suggestionBorderOpacity: Double = 0.4
+    static let suggestionShadowOpacity: Double = 0.18
+    static let suggestionShadowRadius: CGFloat = 18
+    static let suggestionShadowYOffset: CGFloat = 8
+    static let scrollAnimationDuration: TimeInterval = 0.12
+
+    static let rowSpacing: CGFloat = 10
+    static let rowIconWidth: CGFloat = 16
+    static let rowTextSpacing: CGFloat = 3
+    static let rowHorizontalPadding: CGFloat = 12
+    static let rowVerticalPadding: CGFloat = 8
+    static let selectedRowOpacity: Double = 0.18
+    static let openTabBadgeHorizontalPadding: CGFloat = 6
+    static let openTabBadgeVerticalPadding: CGFloat = 2
+    static let openTabBadgeBackgroundOpacity: Double = 0.12
+    static let tapGestureMinimumDistance: CGFloat = 0
+    static let tapSlop: CGFloat = 8
+}
+
 struct URLBar: View {
     @Binding var text: String
     @FocusState.Binding var focused: Bool
@@ -31,18 +69,19 @@ struct URLBar: View {
     var onSubmit: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: URLBarMetrics.controlSpacing) {
             editableArea
             Button(action: onFind) {
                 Image(systemName: "text.magnifyingglass")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: URLBarMetrics.findIconSize, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
+                    .frame(width: URLBarMetrics.iconButtonSize,
+                           height: URLBarMetrics.iconButtonSize)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .disabled(!findEnabled)
-            .opacity(findEnabled ? 1 : 0.35)
+            .opacity(findEnabled ? 1 : URLBarMetrics.disabledOpacity)
             .help("Find on Page (⌘F)")
             if !text.isEmpty && focused {
                 Button {
@@ -54,21 +93,27 @@ struct URLBar: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(Color.secondary.opacity(focused ? 0.14 : 0.10))
-        .clipShape(.rect(cornerRadius: 7, style: .continuous))
+        .padding(.horizontal, URLBarMetrics.horizontalPadding)
+        .padding(.vertical, URLBarMetrics.verticalPadding)
+        .background(Color.secondary.opacity(
+            focused ? URLBarMetrics.focusedBackgroundOpacity : URLBarMetrics.backgroundOpacity
+        ))
+        .clipShape(.rect(cornerRadius: URLBarMetrics.cornerRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(focused ? Color.accentColor.opacity(0.48) : Color.secondary.opacity(0.18),
-                        lineWidth: 0.75)
+            RoundedRectangle(cornerRadius: URLBarMetrics.cornerRadius, style: .continuous)
+                .stroke(
+                    focused
+                        ? Color.accentColor.opacity(URLBarMetrics.focusedStrokeOpacity)
+                        : Color.secondary.opacity(URLBarMetrics.strokeOpacity),
+                    lineWidth: URLBarMetrics.strokeWidth
+                )
         )
     }
 
     private var editableArea: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: URLBarMetrics.editableSpacing) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: URLBarMetrics.searchIconSize, weight: .medium))
                 .foregroundStyle(.secondary)
             field
                 .onChange(of: focused) { _, isFocused in
@@ -103,7 +148,7 @@ struct SuggestionList: View {
     var selectedIndex: Int? = nil
     let onSelect: (OmniboxItem) -> Void
 
-    private static let maxVisibleRows = 5
+    private static let maxVisibleRows = URLBarMetrics.maxVisibleSuggestionRows
     fileprivate static let coordinateSpace = "SuggestionListCoordinateSpace"
 
     @State private var rowFrames: [String: CGRect] = [:]
@@ -111,7 +156,7 @@ struct SuggestionList: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: .zero) {
                     ForEach(Array(suggestions.enumerated()), id: \.element.id) { idx, item in
                         SuggestionRow(
                             item: item,
@@ -121,7 +166,7 @@ struct SuggestionList: View {
                         .id(item.id)
                         .background(SuggestionRowFrameReader(id: item.id))
                         if idx < suggestions.count - 1 {
-                            Divider().opacity(0.4)
+                            Divider().opacity(URLBarMetrics.suggestionDividerOpacity)
                         }
                     }
                 }
@@ -142,9 +187,11 @@ struct SuggestionList: View {
         }
         .background(.regularMaterial)
         .overlay(
-            Rectangle().stroke(.separator.opacity(0.4))
+            Rectangle().stroke(.separator.opacity(URLBarMetrics.suggestionBorderOpacity))
         )
-        .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
+        .shadow(color: .black.opacity(URLBarMetrics.suggestionShadowOpacity),
+                radius: URLBarMetrics.suggestionShadowRadius,
+                y: URLBarMetrics.suggestionShadowYOffset)
     }
 
     private var selectedSuggestionID: String? {
@@ -158,7 +205,7 @@ struct SuggestionList: View {
 
     private func scrollSelectionIntoView(_ proxy: ScrollViewProxy) {
         guard let selectedSuggestionID else { return }
-        withAnimation(.snappy(duration: 0.12)) {
+        withAnimation(.snappy(duration: URLBarMetrics.scrollAnimationDuration)) {
             proxy.scrollTo(selectedSuggestionID, anchor: .center)
         }
     }
@@ -184,10 +231,10 @@ private struct SuggestionRow: View {
         Button {
             selectOnce()
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: URLBarMetrics.rowSpacing) {
                 leadingIcon
-                    .frame(width: 16)
-                VStack(alignment: .leading, spacing: 3) {
+                    .frame(width: URLBarMetrics.rowIconWidth)
+                VStack(alignment: .leading, spacing: URLBarMetrics.rowTextSpacing) {
                     highlighted(displayTitle, ranges: titleRanges, base: .primary)
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
@@ -203,20 +250,20 @@ private struct SuggestionRow: View {
                     Text("Switch to Tab")
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.12))
+                        .padding(.horizontal, URLBarMetrics.openTabBadgeHorizontalPadding)
+                        .padding(.vertical, URLBarMetrics.openTabBadgeVerticalPadding)
+                        .background(Color.secondary.opacity(URLBarMetrics.openTabBadgeBackgroundOpacity))
                         .clipShape(.capsule)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+            .padding(.horizontal, URLBarMetrics.rowHorizontalPadding)
+            .padding(.vertical, URLBarMetrics.rowVerticalPadding)
+            .background(isSelected ? Color.accentColor.opacity(URLBarMetrics.selectedRowOpacity) : Color.clear)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
+            DragGesture(minimumDistance: URLBarMetrics.tapGestureMinimumDistance)
                 .onEnded { value in
                     if value.translation.isTapSized {
                         selectOnce()
@@ -284,12 +331,12 @@ private struct SuggestionRow: View {
     private var leadingIcon: some View {
         switch item.kind {
         case .history, .openTab:
-            FaviconView(url: item.url, size: 16,
+            FaviconView(url: item.url, size: URLBarMetrics.rowIconWidth,
                         fallbackSymbol: item.kind == .openTab
                             ? "rectangle.on.rectangle" : "clock.arrow.circlepath")
         case .search, .open:
             Image(systemName: item.kind == .search ? "magnifyingglass" : "arrow.up.forward.app")
-                .font(.system(size: 12))
+                .font(.system(size: URLBarMetrics.searchIconSize))
                 .foregroundStyle(.tertiary)
         }
     }
@@ -330,6 +377,6 @@ private extension View {
 
 private extension CGSize {
     var isTapSized: Bool {
-        abs(width) <= 8 && abs(height) <= 8
+        abs(width) <= URLBarMetrics.tapSlop && abs(height) <= URLBarMetrics.tapSlop
     }
 }

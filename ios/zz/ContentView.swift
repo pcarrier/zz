@@ -14,6 +14,13 @@ struct ContentView: View {
 }
 
 private struct BrowserScene: View {
+    private enum Metrics {
+        static let suggestionFetchLimit = 100
+        static let suggestionMaxWidth: CGFloat = 720
+        static let suggestionHorizontalPadding: CGFloat = 16
+        static let suggestionBottomPadding: CGFloat = 6
+    }
+
     let windowID: WindowID
     @State private var store: BrowserStore
     @State private var draft: String = ""
@@ -46,19 +53,19 @@ private struct BrowserScene: View {
         _store = State(initialValue: BrowserStore(windowID: windowID, history: history))
     }
 
-    // Ranking the full history (up to ~2000 entries) per read is expensive, so
+    // Ranking the full capped history per read is expensive, so
     // the result is cached in `matches` and only recomputed when an input that
     // affects it changes (draft / focus / open tabs / history). body, BottomBar
     // and the stale-selection check all read the cached value.
     private func computedMatches() -> [OmniboxItem] {
         guard omniboxOpen else { return [] }
-        // Fetch up to 100; the suggestion list caps the visible rows and
+        // Fetch enough candidates for ranking; the suggestion list caps the visible rows and
         // makes the rest scrollable.
         return history.omniboxSuggestions(
             matching: draft,
             openTabs: store.openTabSuggestions(),
             now: .now,
-            limit: 100
+            limit: Metrics.suggestionFetchLimit
         )
     }
 
@@ -102,9 +109,9 @@ private struct BrowserScene: View {
                     selectedIndex: selectedSuggestionIndex,
                     onSelect: selectSuggestion
                 )
-                .frame(maxWidth: 720)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 6)
+                .frame(maxWidth: Metrics.suggestionMaxWidth)
+                .padding(.horizontal, Metrics.suggestionHorizontalPadding)
+                .padding(.bottom, Metrics.suggestionBottomPadding)
                 // Keep margin taps from falling through to the focused pane.
                 .contentShape(.rect)
                 .onTapGesture { }
@@ -130,7 +137,8 @@ private struct BrowserScene: View {
                     return true
                 }
             )
-            .frame(width: 0, height: 0)
+            .frame(width: AppMetrics.HiddenControl.size,
+                   height: AppMetrics.HiddenControl.size)
             .accessibilityHidden(true)
 
             // Plain Cmd-W closes the focused tile. The standard WindowGroup
@@ -146,7 +154,8 @@ private struct BrowserScene: View {
                     return true
                 }
             )
-            .frame(width: 0, height: 0)
+            .frame(width: AppMetrics.HiddenControl.size,
+                   height: AppMetrics.HiddenControl.size)
             .accessibilityHidden(true)
             #endif
         }
@@ -389,8 +398,9 @@ private struct ShortcutLayer: View {
 
             Button("Toggle Zoom") { store.toggleZoom() }
                 .keyboardShortcut("f", modifiers: [.command, .option, .control])
-                .opacity(0)
-                .frame(width: 0, height: 0)
+                .opacity(AppMetrics.HiddenControl.opacity)
+                .frame(width: AppMetrics.HiddenControl.size,
+                       height: AppMetrics.HiddenControl.size)
 
             shortcut("Split Horizontal", "\\") {
                 store.splitSelection(axis: .horizontal)
@@ -415,7 +425,8 @@ private struct ShortcutLayer: View {
                 arrow("Focus Right", .rightArrow, .right)
             }
         }
-        .frame(width: 0, height: 0)
+        .frame(width: AppMetrics.HiddenControl.size,
+               height: AppMetrics.HiddenControl.size)
         .accessibilityHidden(true)
     }
 
@@ -424,16 +435,18 @@ private struct ShortcutLayer: View {
                           action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .keyboardShortcut(key, modifiers: modifiers)
-            .opacity(0)
-            .frame(width: 0, height: 0)
+            .opacity(AppMetrics.HiddenControl.opacity)
+            .frame(width: AppMetrics.HiddenControl.size,
+                   height: AppMetrics.HiddenControl.size)
     }
 
     private func arrow(_ title: String, _ key: KeyEquivalent,
                        _ direction: Direction) -> some View {
         Button(title) { store.moveFocus(direction) }
             .keyboardShortcut(key, modifiers: [.command, .option])
-            .opacity(0)
-            .frame(width: 0, height: 0)
+            .opacity(AppMetrics.HiddenControl.opacity)
+            .frame(width: AppMetrics.HiddenControl.size,
+                   height: AppMetrics.HiddenControl.size)
     }
 
 }
@@ -457,6 +470,11 @@ private struct HistoryMouseButtonLayer: NSViewRepresentable {
 }
 
 private final class HistoryMouseButtonView: NSView {
+    private enum ButtonNumber {
+        static let back = 3
+        static let forward = 4
+    }
+
     var onBack: (() -> Bool)?
     var onForward: (() -> Bool)?
 
@@ -501,9 +519,9 @@ private final class HistoryMouseButtonView: NSView {
 
     private func performHistoryAction(for buttonNumber: Int) -> Bool {
         switch buttonNumber {
-        case 3:
+        case ButtonNumber.back:
             return onBack?() ?? false
-        case 4:
+        case ButtonNumber.forward:
             return onForward?() ?? false
         default:
             return false

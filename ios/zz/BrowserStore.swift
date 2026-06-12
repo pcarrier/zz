@@ -150,7 +150,7 @@ enum BSPNode: Codable, Identifiable, Hashable {
             let existing = BSPNode.leaf(tabID: id)
             let fresh = BSPNode.leaf(tabID: newTabID)
             return .split(
-                id: UUID(), axis: newAxis, ratio: 0.5,
+                id: UUID(), axis: newAxis, ratio: AppMetrics.Split.balancedRatio,
                 first:  side == .before ? fresh : existing,
                 second: side == .before ? existing : fresh
             )
@@ -173,7 +173,7 @@ enum BSPNode: Codable, Identifiable, Hashable {
                 let existing = self
                 let fresh = BSPNode.leaf(tabID: newTabID)
                 return .split(
-                    id: UUID(), axis: newAxis, ratio: 0.5,
+                    id: UUID(), axis: newAxis, ratio: AppMetrics.Split.balancedRatio,
                     first:  side == .before ? fresh : existing,
                     second: side == .before ? existing : fresh
                 )
@@ -248,7 +248,7 @@ enum BSPNode: Codable, Identifiable, Hashable {
         case .leaf: return self
         case .split(let id, let axis, let r, let a, let b):
             if id == splitID {
-                return .split(id: id, axis: axis, ratio: ratio.clamped(to: 0.05...0.95),
+                return .split(id: id, axis: axis, ratio: ratio.clamped(to: AppMetrics.Split.ratioRange),
                               first: a, second: b)
             }
             return .split(id: id, axis: axis, ratio: r,
@@ -274,7 +274,7 @@ enum BSPNode: Codable, Identifiable, Hashable {
         case .leaf:
             return self
         case .split(let id, let axis, _, let a, let b):
-            return .split(id: id, axis: axis, ratio: 0.5,
+            return .split(id: id, axis: axis, ratio: AppMetrics.Split.balancedRatio,
                           first: a.equalizingAllRatios(),
                           second: b.equalizingAllRatios())
         }
@@ -397,7 +397,8 @@ private struct WindowSnapshot: Codable {
         focusedTabID = try c.decodeIfPresent(UUID.self, forKey: .focusedTabID)
         parked = try c.decodeIfPresent([UUID].self, forKey: .parked) ?? []
         tabs = try c.decodeIfPresent([TabRecord].self, forKey: .tabs) ?? []
-        sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth) ?? 220
+        sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth)
+            ?? AppMetrics.Sidebar.defaultWidth
     }
 }
 
@@ -412,7 +413,7 @@ final class BrowserStore {
     var focusedTabID: UUID?
     var selectedGroupID: UUID?
     var parked: [UUID] = []
-    var sidebarWidth: Double = 220
+    var sidebarWidth: Double = AppMetrics.Sidebar.defaultWidth
 
     var tabs: [UUID: Tab] = [:]
 
@@ -448,7 +449,7 @@ final class BrowserStore {
             self.tabs = loadedTabs
             var seenLeafIDs = Set<UUID>()
             self.root = snap.root.deduplicatingLeafIDs(seen: &seenLeafIDs)
-            self.sidebarWidth = snap.sidebarWidth.clamped(to: 0...520)
+            self.sidebarWidth = snap.sidebarWidth.clamped(to: AppMetrics.Sidebar.widthRange)
             for tabID in root.tabIDs() where tabs[tabID] == nil {
                 tabs[tabID] = Tab(id: tabID, history: history)
             }
@@ -471,7 +472,7 @@ final class BrowserStore {
             self.root = .leaf(tabID: tab.id)
             self.parked = []
             self.focusedTabID = tab.id
-            self.sidebarWidth = 220
+            self.sidebarWidth = AppMetrics.Sidebar.defaultWidth
         }
         installTabCallbacks()
     }
@@ -795,7 +796,7 @@ final class BrowserStore {
     func updateRatioDrag(_ splitID: UUID, usable: CGFloat, translation: CGFloat) {
         guard let initial = dragInitialRatios[splitID], usable > 0 else { return }
         let newSize = usable * initial + translation
-        let newRatio = (newSize / usable).clamped(to: 0.05...0.95)
+        let newRatio = (newSize / usable).clamped(to: AppMetrics.Split.ratioRange)
         root = root.settingRatio(newRatio, for: splitID)
     }
 
@@ -814,7 +815,7 @@ final class BrowserStore {
     }
 
     func setSidebarWidth(_ width: Double) {
-        sidebarWidth = width.clamped(to: 0...520)
+        sidebarWidth = width.clamped(to: AppMetrics.Sidebar.widthRange)
         scheduleSave()
     }
 
@@ -829,7 +830,7 @@ final class BrowserStore {
 
     func updateSidebarDrag(translation: CGFloat) {
         guard let initial = dragInitialSidebarWidth else { return }
-        sidebarWidth = (initial - Double(translation)).clamped(to: 0...520)
+        sidebarWidth = (initial - Double(translation)).clamped(to: AppMetrics.Sidebar.widthRange)
     }
 
     func endSidebarDrag() {
@@ -1005,7 +1006,7 @@ final class BrowserStore {
         saveTask?.cancel()
         let url = Self.snapshotFile(for: windowID)
         saveTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
+            try? await Task.sleep(for: AppMetrics.PersistenceDelay.browserSnapshot)
             guard !Task.isCancelled, let self else { return }
             // Build the snapshot only after the debounce window elapses, so a
             // burst of notifyPersistenceChanged() calls (e.g. contentOffset KVO
@@ -1240,7 +1241,7 @@ final class LayoutPresetStore {
         saveTask?.cancel()
         let snapshot = presets
         saveTask = Task {
-            try? await Task.sleep(for: .milliseconds(300))
+            try? await Task.sleep(for: AppMetrics.PersistenceDelay.layoutPresets)
             guard !Task.isCancelled else { return }
             saveGeneration += 1
             let generation = saveGeneration
@@ -1314,6 +1315,25 @@ nonisolated struct HistoryEntry: Codable, Identifiable, Hashable {
 
 // MARK: - URL canonicalization (single source of truth)
 
+nonisolated private enum URLTextConstants {
+    static let defaultWebScheme = "https"
+    static let httpScheme = "http"
+    static let httpsScheme = "https"
+    static let wwwPrefix = "www."
+    static let rootPath = "/"
+    static let defaultHTTPPort = 80
+    static let defaultHTTPSPort = 443
+    static let webSchemePrefixes = ["https://", "http://"]
+
+    static func stripCommonHostPrefix(_ host: String) -> String {
+        var result = host
+        if result.hasPrefix(wwwPrefix) {
+            result.removeFirst(wwwPrefix.count)
+        }
+        return result
+    }
+}
+
 /// The ONLY canonicalizer. record(), suggestion dedup, and the open-tab map all
 /// call it so the dedup/match key never drifts between call sites.
 nonisolated enum URLCanonicalizer {
@@ -1326,27 +1346,29 @@ nonisolated enum URLCanonicalizer {
 
         var comps = URLComponents(string: trimmed)
         if comps?.host == nil {
-            comps = URLComponents(string: "https://" + trimmed)
+            comps = URLComponents(string: "\(URLTextConstants.defaultWebScheme)://" + trimmed)
         }
         guard var c = comps, let rawHost = c.host else {
             return trimmed.lowercased()
         }
 
         // Collapse http/https into https; keep other schemes (file/about) as-is.
-        let scheme = (c.scheme ?? "https").lowercased()
-        let normScheme = (scheme == "http" || scheme == "https") ? "https" : scheme
+        let scheme = (c.scheme ?? URLTextConstants.defaultWebScheme).lowercased()
+        let normScheme = (scheme == URLTextConstants.httpScheme || scheme == URLTextConstants.httpsScheme)
+            ? URLTextConstants.defaultWebScheme
+            : scheme
 
-        var host = rawHost.lowercased()
-        if host.hasPrefix("www.") { host.removeFirst(4) }
+        let host = URLTextConstants.stripCommonHostPrefix(rawHost.lowercased())
 
         // Drop default ports.
-        if let port = c.port, (port == 80 || port == 443) {
+        if let port = c.port,
+           port == URLTextConstants.defaultHTTPPort || port == URLTextConstants.defaultHTTPSPort {
             c.port = nil
         }
         let portSuffix = c.port.map { ":\($0)" } ?? ""
 
         var path = c.percentEncodedPath
-        if path == "/" { path = "" }
+        if path == URLTextConstants.rootPath { path = "" }
 
         var result = "\(normScheme)://\(host)\(portSuffix)\(path)"
         if let query = c.percentEncodedQuery, !query.isEmpty {
@@ -1358,9 +1380,7 @@ nonisolated enum URLCanonicalizer {
     /// Lowercased, www-stripped host for tier matching. Reuses SiteVisual.host
     /// semantics (which prefixes https:// for bare hosts).
     static func host(_ url: String) -> String {
-        var host = SiteVisual.host(for: url).lowercased()
-        if host.hasPrefix("www.") { host.removeFirst(4) }
-        return host
+        URLTextConstants.stripCommonHostPrefix(SiteVisual.host(for: url).lowercased())
     }
 }
 
@@ -1422,6 +1442,33 @@ nonisolated enum OmniboxRanker {
     static let tierSubstring = 4000   // 2
     static let tierFuzzy = 1000       // 1
 
+    private enum FuzzyGate {
+        static let minimumAcronymLength = 2
+        static let requiredBoundaryHitDivisor = 2.0
+        static let maximumSpanMultiplier = 3
+    }
+
+    private enum Score {
+        static let oneHour: TimeInterval = 3_600
+        static let oneDay: TimeInterval = 86_400
+        static let oneWeek: TimeInterval = 604_800
+        static let oneMonth: TimeInterval = 2_592_000
+
+        static let visitedWithinHour = 600
+        static let visitedWithinDay = 400
+        static let visitedWithinWeek = 250
+        static let visitedWithinMonth = 120
+        static let olderVisit = 40
+
+        static let frequencyScale = 40.0
+        static let frequencyLogOffset = 1.0
+        static let frequencyCap = 400
+
+        static let earlinessBase = 200
+        static let earlinessPenaltyPerCharacter = 8
+        static let canonicalLengthPenaltyCap = 120
+    }
+
     struct Normalized {
         let q: String       // trimmed, lowercased
         let qHost: String   // scheme + www stripped (for host comparisons)
@@ -1430,11 +1477,11 @@ nonisolated enum OmniboxRanker {
     static func normalize(_ query: String) -> Normalized {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         var qHost = q
-        for scheme in ["https://", "http://"] where qHost.hasPrefix(scheme) {
+        for scheme in URLTextConstants.webSchemePrefixes where qHost.hasPrefix(scheme) {
             qHost.removeFirst(scheme.count)
             break
         }
-        if qHost.hasPrefix("www.") { qHost.removeFirst(4) }
+        qHost = URLTextConstants.stripCommonHostPrefix(qHost)
         return Normalized(q: q, qHost: qHost)
     }
 
@@ -1611,7 +1658,7 @@ nonisolated enum OmniboxRanker {
 
     /// Acronym match: q's chars are the first letters of consecutive segments.
     private static func acronymRanges(_ q: String, in field: String) -> [Range<String.Index>]? {
-        guard q.count >= 2, !field.isEmpty else { return nil }
+        guard q.count >= FuzzyGate.minimumAcronymLength, !field.isEmpty else { return nil }
         let chars = Array(field)
         // Collect segment-start indices (string start or after a boundary).
         var starts: [Int] = []
@@ -1648,11 +1695,11 @@ nonisolated enum OmniboxRanker {
             let boundaryHits = positions.filter { p in
                 p == 0 || (p - 1 >= 0 && lowerChars[p - 1].isFuzzyBoundary)
             }.count
-            let needBoundary = Int(ceil(Double(q.count) / 2.0))
+            let needBoundary = Int(ceil(Double(q.count) / FuzzyGate.requiredBoundaryHitDivisor))
             guard boundaryHits >= needBoundary else { continue }
             guard let first = positions.first, let last = positions.last else { continue }
             let span = last - first + 1
-            guard span <= 3 * q.count else { continue }
+            guard span <= FuzzyGate.maximumSpanMultiplier * q.count else { continue }
             let score = FuzzyMatch.score(needle: q, in: field) ?? Int.min
             if score > bestScore {
                 bestScore = score
@@ -1710,21 +1757,21 @@ nonisolated enum OmniboxRanker {
 
     private static func recencyWeight(lastVisited: Date, now: Date) -> Int {
         let age = now.timeIntervalSince(lastVisited)
-        if age < 3600 { return 600 }
-        if age < 86_400 { return 400 }
-        if age < 604_800 { return 250 }
-        if age < 2_592_000 { return 120 }
-        return 40
+        if age < Score.oneHour { return Score.visitedWithinHour }
+        if age < Score.oneDay { return Score.visitedWithinDay }
+        if age < Score.oneWeek { return Score.visitedWithinWeek }
+        if age < Score.oneMonth { return Score.visitedWithinMonth }
+        return Score.olderVisit
     }
 
     static func frequencyWeight(visitCount: Int) -> Int {
         let v = max(0, visitCount)
-        let raw = 40.0 * log2(1.0 + Double(v))
-        return min(Int(raw.rounded()), 400)
+        let raw = Score.frequencyScale * log2(Score.frequencyLogOffset + Double(v))
+        return min(Int(raw.rounded()), Score.frequencyCap)
     }
 
     private static func earliness(matchStart: Int) -> Int {
-        max(0, 200 - matchStart * 8)
+        max(0, Score.earlinessBase - matchStart * Score.earlinessPenaltyPerCharacter)
     }
 
     static func frecency(visitCount: Int, lastVisited: Date, now: Date) -> Int {
@@ -1741,7 +1788,7 @@ nonisolated enum OmniboxRanker {
                            includeEarliness: Bool) -> Int {
         let frec = frecency(visitCount: visitCount, lastVisited: lastVisited, now: now)
         let early = includeEarliness ? earliness(matchStart: matchStart) : 0
-        let lengthPenalty = min(canonicalLength, 120)
+        let lengthPenalty = min(canonicalLength, Score.canonicalLengthPenaltyCap)
         return tier + frec + early - lengthPenalty
     }
 }
@@ -1972,13 +2019,15 @@ enum OmniboxSuggestions {
 @MainActor
 @Observable
 final class HistoryStore {
+    nonisolated static let maxEntries = 2000
+    nonisolated static let defaultSuggestionLimit = 8
+
     private(set) var entries: [HistoryEntry] = []
 
     @ObservationIgnored
     private var saveTask: Task<Void, Never>?
     @ObservationIgnored
     private var saveGeneration: UInt64 = 0
-    private let limit = 2000
 
     init() {
         if let data = try? Data(contentsOf: Self.fileURL),
@@ -2005,7 +2054,7 @@ final class HistoryStore {
         } else {
             copy.insert(HistoryEntry(url: trimmed, title: title, lastVisited: .now, visitCount: 1), at: 0)
         }
-        if copy.count > limit { copy = Array(copy.prefix(limit)) }
+        if copy.count > Self.maxEntries { copy = Array(copy.prefix(Self.maxEntries)) }
         entries = copy
         scheduleSave()
     }
@@ -2030,7 +2079,7 @@ final class HistoryStore {
     func omniboxSuggestions(matching query: String,
                             openTabs: [(url: String, title: String?, tabID: UUID)] = [],
                             now: Date = .now,
-                            limit: Int = 8) -> [OmniboxItem] {
+                            limit: Int = HistoryStore.defaultSuggestionLimit) -> [OmniboxItem] {
         OmniboxSuggestions.entries(
             matching: query,
             history: entries,
@@ -2044,7 +2093,7 @@ final class HistoryStore {
         saveTask?.cancel()
         let snapshot = entries
         saveTask = Task {
-            try? await Task.sleep(for: .milliseconds(400))
+            try? await Task.sleep(for: AppMetrics.PersistenceDelay.history)
             guard !Task.isCancelled else { return }
             saveGeneration += 1
             let generation = saveGeneration
@@ -2082,6 +2131,15 @@ final class HistoryStore {
 // MARK: - Fuzzy matching
 
 nonisolated enum FuzzyMatch {
+    private enum Score {
+        static let match = 1
+        static let boundaryBonus = 8
+        static let contiguousBaseBonus = 4
+        static let lengthPenaltyDivisor = 32
+        static let initialPreviousMatch = -2
+        static let initialStreak = 0
+    }
+
     static func score(needle: String, in haystack: String) -> Int? {
         let n = Array(needle.lowercased())
         let h = Array(haystack.lowercased())
@@ -2090,23 +2148,23 @@ nonisolated enum FuzzyMatch {
 
         var ni = 0
         var score = 0
-        var prevMatch = -2
-        var streak = 0
+        var prevMatch = Score.initialPreviousMatch
+        var streak = Score.initialStreak
         for (i, c) in h.enumerated() where ni < n.count && c == n[ni] {
             let isBoundary = i == 0 || h[i - 1].isFuzzyBoundary
-            score += 1
-            if isBoundary { score += 8 }
-            if i == prevMatch + 1 {
-                streak += 1
-                score += 4 + streak
+            score += Score.match
+            if isBoundary { score += Score.boundaryBonus }
+            if i == prevMatch + Score.match {
+                streak += Score.match
+                score += Score.contiguousBaseBonus + streak
             } else {
-                streak = 0
+                streak = Score.initialStreak
             }
             prevMatch = i
-            ni += 1
+            ni += Score.match
         }
         guard ni == n.count else { return nil }
-        score -= h.count / 32
+        score -= h.count / Score.lengthPenaltyDivisor
         return score
     }
 
@@ -2154,24 +2212,27 @@ nonisolated enum URLNormalizer {
                 return url
             }
             // The input carries an explicit, non-web scheme (mailto:, tel:, ftp:,
-            // sms:, data:, javascript:, localhost:8080's bogus "localhost"…).
-            // Never prepend https:// to it — that produces corrupt URLs. Detect a
-            // host:port authority and treat it as web; otherwise reject so the
-            // caller can hand off / search rather than navigate to garbage.
+            // sms:, data:, javascript:, localhost:8080's bogus "localhost"...).
+            // Never prepend https:// to it. Detect a host:port authority and treat
+            // it as a local/dev HTTP URL; otherwise reject so the caller can hand
+            // off / search rather than navigate to garbage.
             if isHostPort(trimmed) {
-                return URL(string: "https://" + trimmed)
+                return URL(string: "http://" + trimmed)
             }
             return nil
         }
         if trimmed.contains(" ") || !trimmed.contains(".") {
             return SearchPreferences.searchURL(for: trimmed, template: searchTemplate)
         }
+        if isHostPort(trimmed) {
+            return URL(string: "http://" + trimmed)
+        }
         return URL(string: "https://" + trimmed)
     }
 
     /// Matches a bare "host:port" (optionally with a "/path"), e.g. "localhost:8080",
-    /// "myhost:3000/path". These have no dot so the dot/space heuristic misroutes
-    /// them to search, and URL() parses them with a bogus scheme equal to the host.
+    /// "myhost:3000/path". These are usually dev servers, so resolve them as HTTP;
+    /// URL() may parse the host as a bogus scheme before the dot/space heuristic runs.
     private static func isHostPort(_ s: String) -> Bool {
         guard let range = s.range(of: #"^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]+(/.*)?$"#,
                                   options: .regularExpression) else { return false }
@@ -2180,7 +2241,7 @@ nonisolated enum URLNormalizer {
         // (tel:5551234, sms:1234, mailto:1234) matches the regex but is a custom
         // URI, not a host:port. Reject when the part before ":" is a known
         // non-web scheme so the caller hands it off rather than navigating to a
-        // corrupt https://scheme:number URL.
+        // corrupt http://scheme:number URL.
         let authority = s.prefix(while: { $0 != ":" }).lowercased()
         let nonWebSchemes: Set<String> = ["tel", "sms", "mailto", "ftp", "data",
                                           "javascript", "file", "about"]

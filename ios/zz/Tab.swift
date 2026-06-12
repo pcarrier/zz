@@ -142,6 +142,19 @@ nonisolated enum PageZoom {
     }
 }
 
+private enum TabMetrics {
+    static let initialWebViewFrame = CGRect(x: 0, y: 0, width: 1024, height: 768)
+    static let forceReloadTimeout: TimeInterval = 60
+    static let restoredNavigationHistoryDelay: Duration = .milliseconds(250)
+    static let restoredScrollDelay: Duration = .milliseconds(150)
+    static let legacyFailingURLStringErrorKey = "NSErrorFailingURLStringKey"
+}
+
+struct NavigationError: Equatable {
+    let url: String
+    let message: String
+}
+
 @MainActor
 @Observable
 final class Tab {
@@ -154,6 +167,7 @@ final class Tab {
     var canGoForward: Bool = false
     var isLoading: Bool = false
     var estimatedProgress: Double = 0
+    var navigationError: NavigationError?
 
     // NB: never assign to pageZoom inside this didSet -- under @Observable that
     // re-enters the setter and didSet fires on every assignment, causing infinite
@@ -284,12 +298,12 @@ final class Tab {
         // Avoid a 0x0 initial viewport before the first layout pass.
         #if os(macOS)
         self.webView = PaneDropRoutingWebView(
-            frame: CGRect(x: 0, y: 0, width: 1024, height: 768),
+            frame: TabMetrics.initialWebViewFrame,
             configuration: config
         )
         #else
         self.webView = NoDropWebView(
-            frame: CGRect(x: 0, y: 0, width: 1024, height: 768),
+            frame: TabMetrics.initialWebViewFrame,
             configuration: config
         )
         #endif
@@ -333,6 +347,7 @@ final class Tab {
             isRestoring = true
             restoreClearGeneration &+= 1
             isNavigationInFlight = true
+            navigationError = nil
             webView.load(URLRequest(url: target))
         }
     }
@@ -351,27 +366,31 @@ final class Tab {
 
     func reload()    {
         isNavigationInFlight = true
+        navigationError = nil
         webView.reload()
     }
     func forceReload() {
         isNavigationInFlight = true
+        navigationError = nil
         if webView.url != nil {
             webView.reloadFromOrigin()
         } else if let target = URLNormalizer.resolve(currentURL) {
             let request = URLRequest(
                 url: target,
                 cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
-                timeoutInterval: 60
+                timeoutInterval: TabMetrics.forceReloadTimeout
             )
             webView.load(request)
         }
     }
     func goBack()    {
         isNavigationInFlight = true
+        navigationError = nil
         webView.goBack()
     }
     func goForward() {
         isNavigationInFlight = true
+        navigationError = nil
         webView.goForward()
     }
     func stop()      { webView.stopLoading() }
@@ -446,6 +465,7 @@ final class Tab {
         guard let target = URLNormalizer.resolve(trimmed) else { return }
         pendingScrollRestore = nil
         isNavigationInFlight = true
+        navigationError = nil
         // An explicit user load is genuine navigation: stop suppressing history
         // even if the restore's initial load has not finished yet. Bumping the
         // generation also voids any deferred restore-clear still pending.
@@ -509,6 +529,7 @@ final class Tab {
 
     func didFinishNavigation() {
         isNavigationInFlight = false
+        navigationError = nil
         // Defer clearing isRestoring rather than clearing it here: WebKit often
         // delivers the page <title> in a later turn, after didFinish, and clearing
         // synchronously would let that late title's KVO observer record the restored
@@ -519,7 +540,7 @@ final class Tab {
         if isRestoring {
             let generation = restoreClearGeneration
             Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .milliseconds(250))
+                try? await Task.sleep(for: TabMetrics.restoredNavigationHistoryDelay)
                 guard let self, self.restoreClearGeneration == generation else { return }
                 self.isRestoring = false
             }
@@ -538,7 +559,7 @@ final class Tab {
         // flips this true if the user scrolls before the deferred restore fires.
         userScrolledSinceFinish = false
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(150))
+            try? await Task.sleep(for: TabMetrics.restoredScrollDelay)
             guard let self else { return }
             // A genuine user scroll during the delay takes precedence over the
             // restore; snapping back would discard their interaction.
@@ -552,7 +573,7 @@ final class Tab {
         #endif
     }
 
-    func handleNavigationFailure() {
+    func handleNavigationFailure(_ error: Error? = nil) {
         // didFinishNavigation is the only other place these flags are cleared, so a
         // navigation that fails (DNS/connection error, error page, cancelled load,
         // user Stop) would otherwise leave them stuck true -- permanently suppressing
@@ -561,10 +582,32 @@ final class Tab {
         isRestoring = false
         restoreClearGeneration &+= 1
         pendingScrollRestore = nil
+        guard let error, !Self.isNavigationCancellation(error) else { return }
+        let failingURL = Self.failingURL(from: error)?.absoluteString ?? currentURL
+        navigationError = NavigationError(
+            url: failingURL,
+            message: (error as NSError).localizedDescription
+        )
     }
 
     private func notifyPersistenceChanged() {
         onPersistenceChange?()
+    }
+
+    private static func isNavigationCancellation(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+
+    private static func failingURL(from error: Error) -> URL? {
+        let nsError = error as NSError
+        if let url = nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL {
+            return url
+        }
+        if let string = nsError.userInfo[TabMetrics.legacyFailingURLStringErrorKey] as? String {
+            return URL(string: string)
+        }
+        return nil
     }
 
     func recoverFromTermination() {
@@ -574,6 +617,7 @@ final class Tab {
         }
         #endif
         isNavigationInFlight = true
+        navigationError = nil
         // reload() is a no-op when there is no committed back-forward item (e.g. the
         // process died during the initial provisional load), which would leave the
         // pane blank and isNavigationInFlight stuck true. Re-issue the original load
@@ -1188,7 +1232,7 @@ private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor [weak owner] in
-            owner?.handleNavigationFailure()
+            owner?.handleNavigationFailure(error)
         }
     }
 
@@ -1196,7 +1240,7 @@ private final class TabNavigationDelegate: NSObject, WKNavigationDelegate {
                  didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
         Task { @MainActor [weak owner] in
-            owner?.handleNavigationFailure()
+            owner?.handleNavigationFailure(error)
         }
     }
 

@@ -9,6 +9,16 @@ struct BrowserUtilityTests {
         #expect(URLNormalizer.resolve("example.com")?.absoluteString == "https://example.com")
     }
 
+    @Test func explicitHTTPIPWithPortStaysHTTP() {
+        #expect(URLNormalizer.resolve("http://100.99.84.87:5173")?.absoluteString == "http://100.99.84.87:5173")
+    }
+
+    @Test func bareHostPortGetsHTTPForDevServers() {
+        #expect(URLNormalizer.resolve("localhost:5173")?.absoluteString == "http://localhost:5173")
+        #expect(URLNormalizer.resolve("shortname:5173")?.absoluteString == "http://shortname:5173")
+        #expect(URLNormalizer.resolve("100.99.84.87:5173")?.absoluteString == "http://100.99.84.87:5173")
+    }
+
     @Test func searchTermsUseDuckDuckGo() {
         #expect(URLNormalizer.resolve(
             "open ai",

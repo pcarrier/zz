@@ -3,6 +3,43 @@ import UniformTypeIdentifiers
 
 private let sidebarReorderCoordinateSpace = "SidebarReorderCoordinateSpace"
 
+private enum SidebarMetrics {
+    static let rowSpacing: CGFloat = 10
+    static let horizontalPadding: CGFloat = 8
+    static let verticalPadding: CGFloat = 12
+    static let insertionIndicatorOffset: CGFloat = 5
+
+    static let previewMinWidth: Double = 80
+    static let previewHorizontalInset: Double = 16
+    static let dragPreviewOpacity: Double = 0.85
+
+    static let swipeProgressMax: Double = 1
+    static let swipeProgressMinDenominator: CGFloat = 1
+    static let dismissIconSize: CGFloat = 18
+    static let dismissIconFrameSize: CGFloat = 52
+    static let dismissBackgroundBaseOpacity: Double = 0.25
+    static let dismissBackgroundProgressOpacity: Double = 0.65
+    static let visibleOpacity: Double = 1
+    static let swipeGestureMinimumDistance: CGFloat = 14
+    static let swipeDismissMinDistance: CGFloat = 72
+    static let swipeDismissWidthRatio: CGFloat = 0.42
+    static let swipePredictionMultiplier: CGFloat = 1.2
+    static let horizontalSwipeDominance: CGFloat = 1.25
+
+    static let insertionIndicatorSpacing: CGFloat = 6
+    static let insertionDotSize: CGFloat = 6
+    static let insertionLineHeight: CGFloat = 3
+
+    static let previewContentSpacing: CGFloat = 6
+    static let previewSeparatorOpacity: Double = 0.5
+    static let previewSeparatorWidth: CGFloat = 0.5
+    static let faviconSize: CGFloat = 14
+    static let faviconTopPadding: CGFloat = 1
+    static let titleSpacing: CGFloat = 1
+    static let staticPreviewSpacing: CGFloat = 8
+    static let staticPreviewFaviconSize: CGFloat = 32
+}
+
 struct SidebarView: View {
     var onSelect: (UUID) -> Void = { _ in }
     var onInteraction: () -> Void = {}
@@ -22,7 +59,7 @@ struct SidebarView: View {
             let sidebarWidth = effectiveSidebarWidth(available: proxy.size.width)
 
             ScrollView {
-                LazyVStack(spacing: 10) {
+                LazyVStack(spacing: SidebarMetrics.rowSpacing) {
                     ForEach(Array(store.parked.enumerated()), id: \.element) { idx, tabID in
                         if let tab = store.tab(tabID) {
                             SidebarParkedRow(
@@ -37,8 +74,8 @@ struct SidebarView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 12)
+                .padding(.horizontal, SidebarMetrics.horizontalPadding)
+                .padding(.vertical, SidebarMetrics.verticalPadding)
                 .coordinateSpace(name: sidebarReorderCoordinateSpace)
                 .onPreferenceChange(SidebarRowFramePreferenceKey.self) { frames in
                     rowFrames = frames
@@ -60,7 +97,7 @@ struct SidebarView: View {
         return store.sidebarWidth
         #else
         if horizontalSizeClass == .compact {
-            return Double(min(max(220, available), 320))
+            return Double(available.clamped(to: AppMetrics.Sidebar.compactWidthRange))
         }
         return store.sidebarWidth
         #endif
@@ -93,14 +130,14 @@ private struct SidebarParkedRow: View {
         .overlay(alignment: .top) {
             if reorderInsertionIndex == index {
                 SidebarInsertionIndicator()
-                    .offset(y: -5)
+                    .offset(y: -SidebarMetrics.insertionIndicatorOffset)
             }
         }
         .overlay(alignment: .bottom) {
             if reorderInsertionIndex == store.parked.count,
                index == store.parked.count - 1 {
                 SidebarInsertionIndicator()
-                    .offset(y: 5)
+                    .offset(y: SidebarMetrics.insertionIndicatorOffset)
             }
         }
     }
@@ -128,28 +165,37 @@ private struct SidebarParkedRow: View {
                 SidebarTilePreview(tab: tab,
                                    sidebarWidth: sidebarWidth,
                                    isLive: false)
-                    .frame(width: max(80, sidebarWidth - 16))
-                    .opacity(0.85)
+                    .frame(width: max(SidebarMetrics.previewMinWidth,
+                                      sidebarWidth - SidebarMetrics.previewHorizontalInset))
+                    .opacity(SidebarMetrics.dragPreviewOpacity)
             }
     }
 
     private var dismissBackground: some View {
-        let progress = min(1, Double(swipeOffset / max(1, CGFloat(sidebarWidth))))
+        let progress = min(
+            SidebarMetrics.swipeProgressMax,
+            Double(swipeOffset / max(SidebarMetrics.swipeProgressMinDenominator, CGFloat(sidebarWidth)))
+        )
 
         return HStack {
             Image(systemName: "trash")
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: SidebarMetrics.dismissIconSize, weight: .medium))
                 .foregroundStyle(.white)
-                .frame(width: 52, height: 52)
+                .frame(width: SidebarMetrics.dismissIconFrameSize,
+                       height: SidebarMetrics.dismissIconFrameSize)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.red.opacity(0.25 + progress * 0.65))
-        .opacity(swipeOffset > 0 ? 1 : 0)
+        .background(Color.red.opacity(
+            SidebarMetrics.dismissBackgroundBaseOpacity
+                + progress * SidebarMetrics.dismissBackgroundProgressOpacity
+        ))
+        .opacity(swipeOffset > 0 ? SidebarMetrics.visibleOpacity : AppMetrics.HiddenControl.opacity)
     }
 
     private var swipeToDismissGesture: some Gesture {
-        DragGesture(minimumDistance: 14, coordinateSpace: .local)
+        DragGesture(minimumDistance: SidebarMetrics.swipeGestureMinimumDistance,
+                    coordinateSpace: .local)
             .onChanged { value in
                 guard isRightSwipe(value) else { return }
                 onInteraction()
@@ -160,9 +206,12 @@ private struct SidebarParkedRow: View {
                     swipeOffset = 0
                     return
                 }
-                let threshold = max(72, CGFloat(sidebarWidth) * 0.42)
+                let threshold = max(
+                    SidebarMetrics.swipeDismissMinDistance,
+                    CGFloat(sidebarWidth) * SidebarMetrics.swipeDismissWidthRatio
+                )
                 if value.translation.width > threshold ||
-                    value.predictedEndTranslation.width > threshold * 1.2 {
+                    value.predictedEndTranslation.width > threshold * SidebarMetrics.swipePredictionMultiplier {
                     // Defer the discard to the next runloop tick. With a pointer
                     // (mouse/trackpad on macOS OR a mouse-enabled iPad) a drag also
                     // starts a .draggable session on the same gesture; discarding
@@ -178,7 +227,7 @@ private struct SidebarParkedRow: View {
 
     private func isRightSwipe(_ value: DragGesture.Value) -> Bool {
         value.translation.width > 0 &&
-            value.translation.width > abs(value.translation.height) * 1.25
+            value.translation.width > abs(value.translation.height) * SidebarMetrics.horizontalSwipeDominance
     }
 }
 
@@ -268,13 +317,14 @@ private struct SidebarReorderDropDelegate: DropDelegate {
 
 private struct SidebarInsertionIndicator: View {
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: SidebarMetrics.insertionIndicatorSpacing) {
             Circle()
                 .fill(Color.accentColor)
-                .frame(width: 6, height: 6)
+                .frame(width: SidebarMetrics.insertionDotSize,
+                       height: SidebarMetrics.insertionDotSize)
             Capsule()
                 .fill(Color.accentColor)
-                .frame(height: 3)
+                .frame(height: SidebarMetrics.insertionLineHeight)
         }
         .allowsHitTesting(false)
     }
@@ -311,21 +361,23 @@ struct SidebarTilePreview: View {
     var shouldHostLiveView: () -> Bool = { true }
 
     var body: some View {
-        let contentWidth = max(80, sidebarWidth - 16)
+        let contentWidth = max(SidebarMetrics.previewMinWidth,
+                               sidebarWidth - SidebarMetrics.previewHorizontalInset)
 
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: SidebarMetrics.previewContentSpacing) {
             previewContent
             .frame(width: contentWidth, height: contentWidth)
             .clipShape(.rect)
             .overlay(
                 Rectangle()
-                    .stroke(.separator.opacity(0.5), lineWidth: 0.5)
+                    .stroke(.separator.opacity(SidebarMetrics.previewSeparatorOpacity),
+                            lineWidth: SidebarMetrics.previewSeparatorWidth)
             )
 
-            HStack(alignment: .top, spacing: 6) {
-                FaviconView(url: tab.currentURL, size: 14)
-                    .padding(.top, 1)
-                VStack(alignment: .leading, spacing: 1) {
+            HStack(alignment: .top, spacing: SidebarMetrics.previewContentSpacing) {
+                FaviconView(url: tab.currentURL, size: SidebarMetrics.faviconSize)
+                    .padding(.top, SidebarMetrics.faviconTopPadding)
+                VStack(alignment: .leading, spacing: SidebarMetrics.titleSpacing) {
                     Text(displayTitle)
                         .font(.caption.weight(.medium))
                         .lineLimit(1)
@@ -374,13 +426,13 @@ private struct StaticSidebarPreview: View {
     var body: some View {
         ZStack {
             Color.canvasSecondary
-            VStack(spacing: 8) {
-                FaviconView(host: host, size: 32)
+            VStack(spacing: SidebarMetrics.staticPreviewSpacing) {
+                FaviconView(host: host, size: SidebarMetrics.staticPreviewFaviconSize)
                 Text(host)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, SidebarMetrics.horizontalPadding)
             }
         }
     }

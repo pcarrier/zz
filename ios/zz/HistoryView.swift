@@ -1,5 +1,15 @@
 import SwiftUI
 
+private enum HistoryViewMetrics {
+    static let minWidth: CGFloat = 420
+    static let minHeight: CGFloat = 480
+    static let rowSpacing: CGFloat = 10
+    static let faviconSize: CGFloat = 18
+    static let rowTextSpacing: CGFloat = 2
+    static let searchResultLimit = 200
+    static let yesterdayOffset = -1
+}
+
 /// A searchable browser of the global HistoryStore, grouped by day. Reachable
 /// from the More menu as a sheet (mirrors the Settings sheet pattern). Tapping a
 /// row opens its URL via the same load path the omnibox uses and dismisses.
@@ -34,7 +44,8 @@ struct HistoryView: View {
                     }
                 }
         }
-        .frame(minWidth: 420, minHeight: 480)
+        .frame(minWidth: HistoryViewMetrics.minWidth,
+               minHeight: HistoryViewMetrics.minHeight)
         .searchable(text: $query, prompt: "Search History")
     }
 
@@ -73,9 +84,11 @@ struct HistoryView: View {
             onOpen(entry.url)
             dismiss()
         } label: {
-            HStack(spacing: 10) {
-                FaviconView(url: entry.url, size: 18, fallbackSymbol: "clock.arrow.circlepath")
-                VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: HistoryViewMetrics.rowSpacing) {
+                FaviconView(url: entry.url,
+                            size: HistoryViewMetrics.faviconSize,
+                            fallbackSymbol: "clock.arrow.circlepath")
+                VStack(alignment: .leading, spacing: HistoryViewMetrics.rowTextSpacing) {
                     Text(displayTitle(entry))
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
@@ -110,7 +123,8 @@ struct HistoryView: View {
     private var filteredEntries: [HistoryEntry] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return history.entries }
-        let items = history.omniboxSuggestions(matching: trimmed, limit: 200)
+        let items = history.omniboxSuggestions(matching: trimmed,
+                                               limit: HistoryViewMetrics.searchResultLimit)
         let matchedKeys = Set(items.filter { $0.kind == .history }.map { URLCanonicalizer.key($0.url) })
         return history.entries.filter { matchedKeys.contains($0.canonicalKey) }
     }
@@ -146,7 +160,9 @@ struct HistoryView: View {
     static func title(for day: Date, now: Date, calendar: Calendar) -> String {
         let today = calendar.startOfDay(for: now)
         if calendar.isDate(day, inSameDayAs: today) { return "Today" }
-        if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
+        if let yesterday = calendar.date(byAdding: .day,
+                                         value: HistoryViewMetrics.yesterdayOffset,
+                                         to: today),
            calendar.isDate(day, inSameDayAs: yesterday) {
             return "Yesterday"
         }

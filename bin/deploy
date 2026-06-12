@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_PATH="$REPO_ROOT/ios/zz.xcodeproj"
+SCHEME="zz"
+CONFIGURATION="Release"
+TEAM_ID="85BMMCPDCG"
+IOS_DESTINATION="generic/platform=iOS"
+MACOS_TEST_DESTINATION="platform=macOS"
+BUILD_ROOT="$REPO_ROOT/build"
+ARCHIVE_ROOT="$BUILD_ROOT/archives"
+UPLOAD_ROOT="$BUILD_ROOT/TestFlight"
+EXPORT_OPTIONS_PATH="$BUILD_ROOT/ExportOptions-TestFlight.plist"
+PLIST_BUDDY="/usr/libexec/PlistBuddy"
+
+RUN_TESTS=1
+
+usage() {
+  cat <<'USAGE'
+Usage: bin/deploy [--skip-tests]
+
+Archives the zz iOS app and uploads it to App Store Connect/TestFlight using
+the Xcode account configured on this machine.
+
+Options:
+  --skip-tests   Archive and upload without running the macOS test suite first.
+  -h, --help     Show this help.
+USAGE
+}
+
+die() {
+  printf 'deploy: %s\n' "$*" >&2
+  exit 1
+}
+
+log() {
+  printf '\n==> %s\n' "$*"
+}
+
+while (($#)); do
+  case "$1" in
+    --skip-tests)
+      RUN_TESTS=0
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+  shift
+done
+
+command -v xcodebuild >/dev/null || die "xcodebuild is not available"
+command -v plutil >/dev/null || die "plutil is not available"
+[[ -x "$PLIST_BUDDY" ]] || die "$PLIST_BUDDY is not available"
+[[ -d "$PROJECT_PATH" ]] || die "missing Xcode project: $PROJECT_PATH"
+
+mkdir -p "$ARCHIVE_ROOT" "$UPLOAD_ROOT"
+
+BUILD_SETTINGS_PATH="$(mktemp "${TMPDIR:-/tmp}/zz-build-settings.XXXXXX")"
+trap 'rm -f "$BUILD_SETTINGS_PATH"' EXIT
+
+log "Resolving release build settings"
+xcodebuild \
+  -showBuildSettings \
+  -project "$PROJECT_PATH" \
+  -scheme "$SCHEME" \
+  -configuration "$CONFIGURATION" \
+  -destination "$IOS_DESTINATION" >"$BUILD_SETTINGS_PATH"
+
+build_setting() {
+  local key="$1"
+  awk -v key="$key" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      prefix = key " = "
+      if (index(line, prefix) == 1) {
+        print substr(line, length(prefix) + 1)
+        exit
+      }
+    }
+  ' "$BUILD_SETTINGS_PATH"
+}
+
+MARKETING_VERSION="$(build_setting MARKETING_VERSION)"
+BUILD_NUMBER="$(build_setting CURRENT_PROJECT_VERSION)"
+BUNDLE_ID="$(build_setting PRODUCT_BUNDLE_IDENTIFIER)"
+
+[[ -n "$MARKETING_VERSION" ]] || die "could not resolve MARKETING_VERSION"
+[[ -n "$BUILD_NUMBER" ]] || die "could not resolve CURRENT_PROJECT_VERSION"
+[[ -n "$BUNDLE_ID" ]] || die "could not resolve PRODUCT_BUNDLE_IDENTIFIER"
+
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+RELEASE_LABEL="$SCHEME-$MARKETING_VERSION-$BUILD_NUMBER-$TIMESTAMP"
+ARCHIVE_PATH="$ARCHIVE_ROOT/$RELEASE_LABEL.xcarchive"
+EXPORT_PATH="$UPLOAD_ROOT/$RELEASE_LABEL"
+
+printf 'App:        %s\n' "$BUNDLE_ID"
+printf 'Version:    %s\n' "$MARKETING_VERSION"
+printf 'Build:      %s\n' "$BUILD_NUMBER"
+printf 'Archive:    %s\n' "$ARCHIVE_PATH"
+printf 'Export log: %s\n' "$EXPORT_PATH"
+
+if ((RUN_TESTS)); then
+  log "Running tests"
+  xcodebuild test \
+    -project "$PROJECT_PATH" \
+    -scheme "$SCHEME" \
+    -destination "$MACOS_TEST_DESTINATION"
+fi
+
+log "Creating iOS archive"
+xcodebuild archive \
+  -project "$PROJECT_PATH" \
+  -scheme "$SCHEME" \
+  -configuration "$CONFIGURATION" \
+  -destination "$IOS_DESTINATION" \
+  -archivePath "$ARCHIVE_PATH" \
+  -allowProvisioningUpdates
+
+log "Writing App Store Connect export options"
+rm -f "$EXPORT_OPTIONS_PATH"
+plutil -create xml1 "$EXPORT_OPTIONS_PATH"
+"$PLIST_BUDDY" \
+  -c "Add :method string app-store-connect" \
+  -c "Add :destination string upload" \
+  -c "Add :teamID string $TEAM_ID" \
+  -c "Add :signingStyle string automatic" \
+  -c "Add :stripSwiftSymbols bool true" \
+  -c "Add :uploadSymbols bool true" \
+  -c "Add :manageAppVersionAndBuildNumber bool false" \
+  "$EXPORT_OPTIONS_PATH"
+
+log "Uploading to App Store Connect/TestFlight"
+xcodebuild -exportArchive \
+  -archivePath "$ARCHIVE_PATH" \
+  -exportPath "$EXPORT_PATH" \
+  -exportOptionsPlist "$EXPORT_OPTIONS_PATH" \
+  -allowProvisioningUpdates
+
+log "Upload submitted"

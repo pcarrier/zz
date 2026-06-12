@@ -1,5 +1,11 @@
 import SwiftUI
 
+private enum SettingsMetrics {
+    static let keywordRowSpacing: CGFloat = 4
+    static let keywordFieldWidth: CGFloat = 90
+    static let minWidth: CGFloat = 420
+}
+
 struct SettingsView: View {
     @Environment(HistoryStore.self) private var history
     @Environment(\.dismiss) private var dismiss
@@ -40,11 +46,11 @@ struct SettingsView: View {
 
             Section("Keyword Searches") {
                 ForEach($keywordEngines) { $engine in
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: SettingsMetrics.keywordRowSpacing) {
                         HStack {
                             TextField("Keyword", text: $engine.keyword)
                                 .textFieldStyle(.roundedBorder)
-                                .frame(width: 90)
+                                .frame(width: SettingsMetrics.keywordFieldWidth)
                             TextField("Title", text: $engine.title)
                                 .textFieldStyle(.roundedBorder)
                             Button(role: .destructive) {
@@ -99,7 +105,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .frame(minWidth: 420)
+        .frame(minWidth: SettingsMetrics.minWidth)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { dismiss() }

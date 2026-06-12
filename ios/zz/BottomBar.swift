@@ -6,6 +6,24 @@ import UIKit
 import AppKit
 #endif
 
+private enum BottomBarMetrics {
+    static let mainSpacing: CGFloat = 6
+    static let buttonGroupSpacing: CGFloat = 2
+    static let horizontalPadding: CGFloat = 10
+    static let topPadding: CGFloat = 6
+    static let bottomPadding: CGFloat = 2
+    static let dividerOpacity: Double = 0.28
+    static let dividerHeight: CGFloat = 0.5
+    static let disabledOpacity: Double = 0.35
+
+    static let forceReloadLongPressDuration: TimeInterval = 0.45
+    static let forceReloadSuppressResetDelay: Duration = .milliseconds(700)
+    static let historyMenuItemLimit = 25
+
+    static let iconSize: CGFloat = 14
+    static let iconButtonSize: CGFloat = 30
+}
+
 struct BottomBar: View {
     @Binding var draft: String
     @FocusState.Binding var urlFocused: Bool
@@ -26,7 +44,7 @@ struct BottomBar: View {
 
     var body: some View {
         let tab = store.focusedTab
-        HStack(spacing: 6) {
+        HStack(spacing: BottomBarMetrics.mainSpacing) {
             navButtons(tab: tab)
             URLBar(
                 text: $draft,
@@ -71,20 +89,22 @@ struct BottomBar: View {
                 actionButtons(tab: tab)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 6)
-        .padding(.bottom, 2)
+        .padding(.horizontal, BottomBarMetrics.horizontalPadding)
+        .padding(.top, BottomBarMetrics.topPadding)
+        .padding(.bottom, BottomBarMetrics.bottomPadding)
         .background(.bar, ignoresSafeAreaEdges: .bottom)
         .contentShape(.rect)
         .onTapGesture { }
         .overlay(alignment: .top) {
-            Rectangle().fill(.separator.opacity(0.28)).frame(height: 0.5)
+            Rectangle()
+                .fill(.separator.opacity(BottomBarMetrics.dividerOpacity))
+                .frame(height: BottomBarMetrics.dividerHeight)
         }
     }
 
     @ViewBuilder
     private func navButtons(tab: Tab?) -> some View {
-        HStack(spacing: 2) {
+        HStack(spacing: BottomBarMetrics.buttonGroupSpacing) {
             HistoryMenu(
                 tab: tab,
                 items: (tab?.backList ?? []).reversed(),
@@ -109,7 +129,7 @@ struct BottomBar: View {
 
     @ViewBuilder
     private func actionButtons(tab: Tab?) -> some View {
-        HStack(spacing: 2) {
+        HStack(spacing: BottomBarMetrics.buttonGroupSpacing) {
             BarIconButton(name: store.zoomedTabID == nil
                             ? "arrow.up.left.and.arrow.down.right"
                             : "arrow.down.right.and.arrow.up.left",
@@ -523,9 +543,9 @@ private struct ReloadControl: View {
             }
             .buttonStyle(.plain)
             .disabled(tab == nil)
-            .opacity(tab == nil ? 0.35 : 1)
+            .opacity(tab == nil ? BottomBarMetrics.disabledOpacity : 1)
             .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.45)
+                LongPressGesture(minimumDuration: BottomBarMetrics.forceReloadLongPressDuration)
                     .onEnded { _ in
                         guard tab != nil else { return }
                         onInteraction()
@@ -533,7 +553,7 @@ private struct ReloadControl: View {
                         tab?.forceReload()
                         suppressResetTask?.cancel()
                         suppressResetTask = Task { @MainActor in
-                            try? await Task.sleep(for: .milliseconds(700))
+                            try? await Task.sleep(for: BottomBarMetrics.forceReloadSuppressResetDelay)
                             guard !Task.isCancelled else { return }
                             suppressNextTap = false
                         }
@@ -571,7 +591,7 @@ private struct HistoryMenu: View {
         Group {
             if enabled && !items.isEmpty {
                 Menu {
-                    ForEach(items.prefix(25), id: \.self) { item in
+                    ForEach(items.prefix(BottomBarMetrics.historyMenuItemLimit), id: \.self) { item in
                         Button {
                             onInteraction()
                             tab?.go(to: item)
@@ -600,7 +620,7 @@ private struct HistoryMenu: View {
                     .disabled(!enabled)
             }
         }
-        .opacity(enabled ? 1 : 0.35)
+        .opacity(enabled ? 1 : BottomBarMetrics.disabledOpacity)
         .help(help)
     }
 
@@ -622,15 +642,16 @@ private struct BarIconButton: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.35)
+        .opacity(enabled ? 1 : BottomBarMetrics.disabledOpacity)
         .help(help)
     }
 }
 
 private func barIcon(_ name: String) -> some View {
     Image(systemName: name)
-        .font(.system(size: 14, weight: .medium))
-        .frame(width: 30, height: 30)
+        .font(.system(size: BottomBarMetrics.iconSize, weight: .medium))
+        .frame(width: BottomBarMetrics.iconButtonSize,
+               height: BottomBarMetrics.iconButtonSize)
         .contentShape(.rect)
 }
 
