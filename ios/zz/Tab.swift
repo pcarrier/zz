@@ -302,7 +302,9 @@ final class Tab {
             configuration: config
         )
         #else
-        self.webView = NoDropWebView(
+        // Keep WebKit's input and interaction machinery intact for Password
+        // AutoFill, paste, and form editing. Pane drops are handled by TileView.
+        self.webView = WKWebView(
             frame: TabMetrics.initialWebViewFrame,
             configuration: config
         )
@@ -404,13 +406,7 @@ final class Tab {
         #else
         DispatchQueue.main.async { [weak webView] in
             guard let webView else { return }
-            if let contentView = webView.scrollView.subviews.first(where: { subview in
-                NSStringFromClass(type(of: subview)).contains("WKContent")
-            }) {
-                contentView.becomeFirstResponder()
-            } else {
-                webView.becomeFirstResponder()
-            }
+            webView.becomeFirstResponder()
         }
         #endif
     }
@@ -1043,121 +1039,6 @@ final class PaneDropRoutingWebView: WKWebView {
             return urlString
         }
         return nil
-    }
-}
-#endif
-
-#if !os(macOS)
-/// WebKit hooks for pane drops and stuck image-analysis deferrers.
-private final class NoDropWebView: WKWebView {
-    override var pasteConfiguration: UIPasteConfiguration? {
-        get { nil }
-        set { }
-    }
-
-    override func canPaste(_ itemProviders: [NSItemProvider]) -> Bool {
-        false
-    }
-
-    override func paste(itemProviders: [NSItemProvider]) { }
-
-    override func addInteraction(_ interaction: any UIInteraction) {
-        if interaction is UIDropInteraction { return }
-        super.addInteraction(interaction)
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        sanitizeWebKitSubviews()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        sanitizeWebKitSubviews()
-    }
-
-    private func sanitizeWebKitSubviews() {
-        stripDropInteractions()
-        removeImageAnalysisDeferrers()
-        Self.installPasteGuard(on: self)
-    }
-
-    private func stripDropInteractions() {
-        for view in [scrollView] + scrollView.subviews + [self] {
-            for interaction in view.interactions where interaction is UIDropInteraction {
-                view.removeInteraction(interaction)
-            }
-        }
-    }
-
-    private func removeImageAnalysisDeferrers() {
-        Self.removeImageAnalysisDeferrers(in: scrollView)
-    }
-
-    private static func removeImageAnalysisDeferrers(in view: UIView) {
-        if let recognizers = view.gestureRecognizers {
-            for recognizer in recognizers where isImageAnalysisDeferrer(recognizer) {
-                remove(recognizer, from: view)
-            }
-        }
-        for subview in view.subviews {
-            removeImageAnalysisDeferrers(in: subview)
-        }
-    }
-
-    private static func remove(_ recognizer: UIGestureRecognizer, from view: UIView) {
-        switch recognizer.state {
-        case .possible, .failed, .cancelled:
-            view.removeGestureRecognizer(recognizer)
-        default:
-            DispatchQueue.main.async { [weak view, weak recognizer] in
-                guard let view, let recognizer,
-                      recognizer.view === view else { return }
-                view.removeGestureRecognizer(recognizer)
-            }
-        }
-    }
-
-    private static func isImageAnalysisDeferrer(_ recognizer: UIGestureRecognizer) -> Bool {
-        if recognizer.name?.localizedCaseInsensitiveContains("image analysis") == true {
-            return true
-        }
-        return String(describing: recognizer)
-            .localizedCaseInsensitiveContains("Deferrer for image analysis")
-    }
-
-    private static func installPasteGuard(on webView: WKWebView) {
-        guard let target = webView.scrollView.subviews.first(where: { sub in
-            NSStringFromClass(type(of: sub)).contains("WKContent")
-        }) else { return }
-
-        if NSStringFromClass(type(of: target)).hasPrefix("_ZZ_NoDropPaste_") {
-            target.pasteConfiguration = nil
-            return
-        }
-
-        let originalClass: AnyClass = type(of: target)
-        let newClassName = "_ZZ_NoDropPaste_" + NSStringFromClass(originalClass)
-        if let existing = NSClassFromString(newClassName) {
-            object_setClass(target, existing)
-            target.pasteConfiguration = nil
-            return
-        }
-        guard let newClass = objc_allocateClassPair(originalClass, newClassName, 0) else { return }
-
-        let pasteSelector = NSSelectorFromString("pasteItemProviders:")
-        let pasteBlock: @convention(block) (Any, [NSItemProvider]) -> Void = { _, _ in }
-        class_addMethod(newClass, pasteSelector,
-                        imp_implementationWithBlock(pasteBlock), "v@:@")
-
-        let canPasteSelector = NSSelectorFromString("canPasteItemProviders:")
-        let canPasteBlock: @convention(block) (Any, [NSItemProvider]) -> Bool = { _, _ in false }
-        class_addMethod(newClass, canPasteSelector,
-                        imp_implementationWithBlock(canPasteBlock), "c@:@")
-
-        objc_registerClassPair(newClass)
-        object_setClass(target, newClass)
-        target.pasteConfiguration = nil
     }
 }
 #endif
