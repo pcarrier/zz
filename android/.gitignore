@@ -1,0 +1,47 @@
+# Built application files
+*.apk
+*.aar
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+
+# Gradle files
+.gradle/
+build/
+
+# Local configuration file (SDK path, etc.)
+local.properties
+
+# Log / cache
+*.log
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IntelliJ / Android Studio
+*.iml
+.idea/
+*.ipr
+*.iws
+
+# Keystore files (do not commit signing material)
+*.jks
+*.keystore
+
+# macOS / editor noise
+.DS_Store
+
+# Kotlin
+.kotlin/
+
+# NOTE: gradle/wrapper/gradle-wrapper.jar IS committed (Gradle wrapper).
